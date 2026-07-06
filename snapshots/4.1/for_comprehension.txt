@@ -1,0 +1,553 @@
+@ ProgramNode (location: (1,0)-(17,3))
+├── flags: ∅
+├── locals: []
+└── statements:
+    @ StatementsNode (location: (1,0)-(17,3))
+    ├── flags: ∅
+    └── body: (length: 7)
+        ├── @ ForComprehensionNode (location: (1,0)-(1,26))
+        │   ├── flags: newline
+        │   ├── locals: [:x]
+        │   ├── iterators: (length: 1)
+        │   │   └── @ ForComprehensionIteratorNode (location: (1,4)-(1,11))
+        │   │       ├── flags: ∅
+        │   │       ├── locals: [:x]
+        │   │       ├── index:
+        │   │       │   @ LocalVariableTargetNode (location: (1,4)-(1,5))
+        │   │       │   ├── flags: ∅
+        │   │       │   ├── name: :x
+        │   │       │   └── depth: 0
+        │   │       ├── collection:
+        │   │       │   @ CallNode (location: (1,9)-(1,11))
+        │   │       │   ├── flags: variable_call, ignore_visibility
+        │   │       │   ├── receiver: ∅
+        │   │       │   ├── call_operator_loc: ∅
+        │   │       │   ├── name: :xs
+        │   │       │   ├── message_loc: (1,9)-(1,11) = "xs"
+        │   │       │   ├── opening_loc: ∅
+        │   │       │   ├── arguments: ∅
+        │   │       │   ├── closing_loc: ∅
+        │   │       │   ├── equal_loc: ∅
+        │   │       │   └── block: ∅
+        │   │       ├── guard: ∅
+        │   │       ├── in_keyword_loc: (1,6)-(1,8) = "in"
+        │   │       └── when_keyword_loc: ∅
+        │   ├── statements:
+        │   │   @ StatementsNode (location: (1,17)-(1,22))
+        │   │   ├── flags: ∅
+        │   │   └── body: (length: 1)
+        │   │       └── @ CallNode (location: (1,17)-(1,22))
+        │   │           ├── flags: newline
+        │   │           ├── receiver:
+        │   │           │   @ LocalVariableReadNode (location: (1,17)-(1,18))
+        │   │           │   ├── flags: ∅
+        │   │           │   ├── name: :x
+        │   │           │   └── depth: 0
+        │   │           ├── call_operator_loc: ∅
+        │   │           ├── name: :*
+        │   │           ├── message_loc: (1,19)-(1,20) = "*"
+        │   │           ├── opening_loc: ∅
+        │   │           ├── arguments:
+        │   │           │   @ ArgumentsNode (location: (1,21)-(1,22))
+        │   │           │   ├── flags: ∅
+        │   │           │   └── arguments: (length: 1)
+        │   │           │       └── @ IntegerNode (location: (1,21)-(1,22))
+        │   │           │           ├── flags: static_literal, decimal
+        │   │           │           └── value: 2
+        │   │           ├── closing_loc: ∅
+        │   │           ├── equal_loc: ∅
+        │   │           └── block: ∅
+        │   ├── for_keyword_loc: (1,0)-(1,3) = "for"
+        │   ├── then_keyword_loc: (1,12)-(1,16) = "then"
+        │   └── end_keyword_loc: (1,23)-(1,26) = "end"
+        ├── @ ForComprehensionNode (location: (3,0)-(3,36))
+        │   ├── flags: newline
+        │   ├── locals: [:x, :y]
+        │   ├── iterators: (length: 2)
+        │   │   ├── @ ForComprehensionIteratorNode (location: (3,4)-(3,11))
+        │   │   │   ├── flags: ∅
+        │   │   │   ├── locals: [:x]
+        │   │   │   ├── index:
+        │   │   │   │   @ LocalVariableTargetNode (location: (3,4)-(3,5))
+        │   │   │   │   ├── flags: ∅
+        │   │   │   │   ├── name: :x
+        │   │   │   │   └── depth: 0
+        │   │   │   ├── collection:
+        │   │   │   │   @ CallNode (location: (3,9)-(3,11))
+        │   │   │   │   ├── flags: variable_call, ignore_visibility
+        │   │   │   │   ├── receiver: ∅
+        │   │   │   │   ├── call_operator_loc: ∅
+        │   │   │   │   ├── name: :xs
+        │   │   │   │   ├── message_loc: (3,9)-(3,11) = "xs"
+        │   │   │   │   ├── opening_loc: ∅
+        │   │   │   │   ├── arguments: ∅
+        │   │   │   │   ├── closing_loc: ∅
+        │   │   │   │   ├── equal_loc: ∅
+        │   │   │   │   └── block: ∅
+        │   │   │   ├── guard: ∅
+        │   │   │   ├── in_keyword_loc: (3,6)-(3,8) = "in"
+        │   │   │   └── when_keyword_loc: ∅
+        │   │   └── @ ForComprehensionIteratorNode (location: (3,13)-(3,20))
+        │   │       ├── flags: ∅
+        │   │       ├── locals: [:y]
+        │   │       ├── index:
+        │   │       │   @ LocalVariableTargetNode (location: (3,13)-(3,14))
+        │   │       │   ├── flags: ∅
+        │   │       │   ├── name: :y
+        │   │       │   └── depth: 0
+        │   │       ├── collection:
+        │   │       │   @ CallNode (location: (3,18)-(3,20))
+        │   │       │   ├── flags: variable_call, ignore_visibility
+        │   │       │   ├── receiver: ∅
+        │   │       │   ├── call_operator_loc: ∅
+        │   │       │   ├── name: :ys
+        │   │       │   ├── message_loc: (3,18)-(3,20) = "ys"
+        │   │       │   ├── opening_loc: ∅
+        │   │       │   ├── arguments: ∅
+        │   │       │   ├── closing_loc: ∅
+        │   │       │   ├── equal_loc: ∅
+        │   │       │   └── block: ∅
+        │   │       ├── guard: ∅
+        │   │       ├── in_keyword_loc: (3,15)-(3,17) = "in"
+        │   │       └── when_keyword_loc: ∅
+        │   ├── statements:
+        │   │   @ StatementsNode (location: (3,26)-(3,32))
+        │   │   ├── flags: ∅
+        │   │   └── body: (length: 1)
+        │   │       └── @ ArrayNode (location: (3,26)-(3,32))
+        │   │           ├── flags: newline
+        │   │           ├── elements: (length: 2)
+        │   │           │   ├── @ LocalVariableReadNode (location: (3,27)-(3,28))
+        │   │           │   │   ├── flags: ∅
+        │   │           │   │   ├── name: :x
+        │   │           │   │   └── depth: 0
+        │   │           │   └── @ LocalVariableReadNode (location: (3,30)-(3,31))
+        │   │           │       ├── flags: ∅
+        │   │           │       ├── name: :y
+        │   │           │       └── depth: 0
+        │   │           ├── opening_loc: (3,26)-(3,27) = "["
+        │   │           └── closing_loc: (3,31)-(3,32) = "]"
+        │   ├── for_keyword_loc: (3,0)-(3,3) = "for"
+        │   ├── then_keyword_loc: (3,21)-(3,25) = "then"
+        │   └── end_keyword_loc: (3,33)-(3,36) = "end"
+        ├── @ ForComprehensionNode (location: (5,0)-(5,38))
+        │   ├── flags: newline
+        │   ├── locals: [:x, :y]
+        │   ├── iterators: (length: 2)
+        │   │   ├── @ ForComprehensionIteratorNode (location: (5,4)-(5,11))
+        │   │   │   ├── flags: ∅
+        │   │   │   ├── locals: [:x]
+        │   │   │   ├── index:
+        │   │   │   │   @ LocalVariableTargetNode (location: (5,4)-(5,5))
+        │   │   │   │   ├── flags: ∅
+        │   │   │   │   ├── name: :x
+        │   │   │   │   └── depth: 0
+        │   │   │   ├── collection:
+        │   │   │   │   @ CallNode (location: (5,9)-(5,11))
+        │   │   │   │   ├── flags: variable_call, ignore_visibility
+        │   │   │   │   ├── receiver: ∅
+        │   │   │   │   ├── call_operator_loc: ∅
+        │   │   │   │   ├── name: :xs
+        │   │   │   │   ├── message_loc: (5,9)-(5,11) = "xs"
+        │   │   │   │   ├── opening_loc: ∅
+        │   │   │   │   ├── arguments: ∅
+        │   │   │   │   ├── closing_loc: ∅
+        │   │   │   │   ├── equal_loc: ∅
+        │   │   │   │   └── block: ∅
+        │   │   │   ├── guard: ∅
+        │   │   │   ├── in_keyword_loc: (5,6)-(5,8) = "in"
+        │   │   │   └── when_keyword_loc: ∅
+        │   │   └── @ ForComprehensionIteratorNode (location: (5,13)-(5,22))
+        │   │       ├── flags: ∅
+        │   │       ├── locals: [:y]
+        │   │       ├── index:
+        │   │       │   @ LocalVariableTargetNode (location: (5,13)-(5,14))
+        │   │       │   ├── flags: ∅
+        │   │       │   ├── name: :y
+        │   │       │   └── depth: 0
+        │   │       ├── collection:
+        │   │       │   @ CallNode (location: (5,18)-(5,22))
+        │   │       │   ├── flags: ignore_visibility
+        │   │       │   ├── receiver: ∅
+        │   │       │   ├── call_operator_loc: ∅
+        │   │       │   ├── name: :f
+        │   │       │   ├── message_loc: (5,18)-(5,19) = "f"
+        │   │       │   ├── opening_loc: (5,19)-(5,20) = "("
+        │   │       │   ├── arguments:
+        │   │       │   │   @ ArgumentsNode (location: (5,20)-(5,21))
+        │   │       │   │   ├── flags: ∅
+        │   │       │   │   └── arguments: (length: 1)
+        │   │       │   │       └── @ LocalVariableReadNode (location: (5,20)-(5,21))
+        │   │       │   │           ├── flags: ∅
+        │   │       │   │           ├── name: :x
+        │   │       │   │           └── depth: 0
+        │   │       │   ├── closing_loc: (5,21)-(5,22) = ")"
+        │   │       │   ├── equal_loc: ∅
+        │   │       │   └── block: ∅
+        │   │       ├── guard: ∅
+        │   │       ├── in_keyword_loc: (5,15)-(5,17) = "in"
+        │   │       └── when_keyword_loc: ∅
+        │   ├── statements:
+        │   │   @ StatementsNode (location: (5,28)-(5,34))
+        │   │   ├── flags: ∅
+        │   │   └── body: (length: 1)
+        │   │       └── @ ArrayNode (location: (5,28)-(5,34))
+        │   │           ├── flags: newline
+        │   │           ├── elements: (length: 2)
+        │   │           │   ├── @ LocalVariableReadNode (location: (5,29)-(5,30))
+        │   │           │   │   ├── flags: ∅
+        │   │           │   │   ├── name: :x
+        │   │           │   │   └── depth: 0
+        │   │           │   └── @ LocalVariableReadNode (location: (5,32)-(5,33))
+        │   │           │       ├── flags: ∅
+        │   │           │       ├── name: :y
+        │   │           │       └── depth: 0
+        │   │           ├── opening_loc: (5,28)-(5,29) = "["
+        │   │           └── closing_loc: (5,33)-(5,34) = "]"
+        │   ├── for_keyword_loc: (5,0)-(5,3) = "for"
+        │   ├── then_keyword_loc: (5,23)-(5,27) = "then"
+        │   └── end_keyword_loc: (5,35)-(5,38) = "end"
+        ├── @ ForComprehensionNode (location: (7,0)-(7,60))
+        │   ├── flags: newline
+        │   ├── locals: [:x, :y]
+        │   ├── iterators: (length: 2)
+        │   │   ├── @ ForComprehensionIteratorNode (location: (7,4)-(7,24))
+        │   │   │   ├── flags: ∅
+        │   │   │   ├── locals: [:x]
+        │   │   │   ├── index:
+        │   │   │   │   @ LocalVariableTargetNode (location: (7,4)-(7,5))
+        │   │   │   │   ├── flags: ∅
+        │   │   │   │   ├── name: :x
+        │   │   │   │   └── depth: 0
+        │   │   │   ├── collection:
+        │   │   │   │   @ CallNode (location: (7,9)-(7,11))
+        │   │   │   │   ├── flags: variable_call, ignore_visibility
+        │   │   │   │   ├── receiver: ∅
+        │   │   │   │   ├── call_operator_loc: ∅
+        │   │   │   │   ├── name: :xs
+        │   │   │   │   ├── message_loc: (7,9)-(7,11) = "xs"
+        │   │   │   │   ├── opening_loc: ∅
+        │   │   │   │   ├── arguments: ∅
+        │   │   │   │   ├── closing_loc: ∅
+        │   │   │   │   ├── equal_loc: ∅
+        │   │   │   │   └── block: ∅
+        │   │   │   ├── guard:
+        │   │   │   │   @ CallNode (location: (7,17)-(7,24))
+        │   │   │   │   ├── flags: ∅
+        │   │   │   │   ├── receiver:
+        │   │   │   │   │   @ LocalVariableReadNode (location: (7,17)-(7,18))
+        │   │   │   │   │   ├── flags: ∅
+        │   │   │   │   │   ├── name: :x
+        │   │   │   │   │   └── depth: 0
+        │   │   │   │   ├── call_operator_loc: (7,18)-(7,19) = "."
+        │   │   │   │   ├── name: :even?
+        │   │   │   │   ├── message_loc: (7,19)-(7,24) = "even?"
+        │   │   │   │   ├── opening_loc: ∅
+        │   │   │   │   ├── arguments: ∅
+        │   │   │   │   ├── closing_loc: ∅
+        │   │   │   │   ├── equal_loc: ∅
+        │   │   │   │   └── block: ∅
+        │   │   │   ├── in_keyword_loc: (7,6)-(7,8) = "in"
+        │   │   │   └── when_keyword_loc: (7,12)-(7,16) = "when"
+        │   │   └── @ ForComprehensionIteratorNode (location: (7,26)-(7,44))
+        │   │       ├── flags: ∅
+        │   │       ├── locals: [:y]
+        │   │       ├── index:
+        │   │       │   @ LocalVariableTargetNode (location: (7,26)-(7,27))
+        │   │       │   ├── flags: ∅
+        │   │       │   ├── name: :y
+        │   │       │   └── depth: 0
+        │   │       ├── collection:
+        │   │       │   @ CallNode (location: (7,31)-(7,33))
+        │   │       │   ├── flags: variable_call, ignore_visibility
+        │   │       │   ├── receiver: ∅
+        │   │       │   ├── call_operator_loc: ∅
+        │   │       │   ├── name: :ys
+        │   │       │   ├── message_loc: (7,31)-(7,33) = "ys"
+        │   │       │   ├── opening_loc: ∅
+        │   │       │   ├── arguments: ∅
+        │   │       │   ├── closing_loc: ∅
+        │   │       │   ├── equal_loc: ∅
+        │   │       │   └── block: ∅
+        │   │       ├── guard:
+        │   │       │   @ CallNode (location: (7,39)-(7,44))
+        │   │       │   ├── flags: ∅
+        │   │       │   ├── receiver:
+        │   │       │   │   @ LocalVariableReadNode (location: (7,39)-(7,40))
+        │   │       │   │   ├── flags: ∅
+        │   │       │   │   ├── name: :x
+        │   │       │   │   └── depth: 0
+        │   │       │   ├── call_operator_loc: ∅
+        │   │       │   ├── name: :<
+        │   │       │   ├── message_loc: (7,41)-(7,42) = "<"
+        │   │       │   ├── opening_loc: ∅
+        │   │       │   ├── arguments:
+        │   │       │   │   @ ArgumentsNode (location: (7,43)-(7,44))
+        │   │       │   │   ├── flags: ∅
+        │   │       │   │   └── arguments: (length: 1)
+        │   │       │   │       └── @ LocalVariableReadNode (location: (7,43)-(7,44))
+        │   │       │   │           ├── flags: ∅
+        │   │       │   │           ├── name: :y
+        │   │       │   │           └── depth: 0
+        │   │       │   ├── closing_loc: ∅
+        │   │       │   ├── equal_loc: ∅
+        │   │       │   └── block: ∅
+        │   │       ├── in_keyword_loc: (7,28)-(7,30) = "in"
+        │   │       └── when_keyword_loc: (7,34)-(7,38) = "when"
+        │   ├── statements:
+        │   │   @ StatementsNode (location: (7,50)-(7,56))
+        │   │   ├── flags: ∅
+        │   │   └── body: (length: 1)
+        │   │       └── @ ArrayNode (location: (7,50)-(7,56))
+        │   │           ├── flags: newline
+        │   │           ├── elements: (length: 2)
+        │   │           │   ├── @ LocalVariableReadNode (location: (7,51)-(7,52))
+        │   │           │   │   ├── flags: ∅
+        │   │           │   │   ├── name: :x
+        │   │           │   │   └── depth: 0
+        │   │           │   └── @ LocalVariableReadNode (location: (7,54)-(7,55))
+        │   │           │       ├── flags: ∅
+        │   │           │       ├── name: :y
+        │   │           │       └── depth: 0
+        │   │           ├── opening_loc: (7,50)-(7,51) = "["
+        │   │           └── closing_loc: (7,55)-(7,56) = "]"
+        │   ├── for_keyword_loc: (7,0)-(7,3) = "for"
+        │   ├── then_keyword_loc: (7,45)-(7,49) = "then"
+        │   └── end_keyword_loc: (7,57)-(7,60) = "end"
+        ├── @ ForComprehensionNode (location: (9,0)-(9,34))
+        │   ├── flags: newline
+        │   ├── locals: [:a, :b]
+        │   ├── iterators: (length: 1)
+        │   │   └── @ ForComprehensionIteratorNode (location: (9,4)-(9,19))
+        │   │       ├── flags: ∅
+        │   │       ├── locals: [:a, :b]
+        │   │       ├── index:
+        │   │       │   @ MultiTargetNode (location: (9,4)-(9,10))
+        │   │       │   ├── flags: ∅
+        │   │       │   ├── lefts: (length: 2)
+        │   │       │   │   ├── @ LocalVariableTargetNode (location: (9,5)-(9,6))
+        │   │       │   │   │   ├── flags: ∅
+        │   │       │   │   │   ├── name: :a
+        │   │       │   │   │   └── depth: 0
+        │   │       │   │   └── @ LocalVariableTargetNode (location: (9,8)-(9,9))
+        │   │       │   │       ├── flags: ∅
+        │   │       │   │       ├── name: :b
+        │   │       │   │       └── depth: 0
+        │   │       │   ├── rest: ∅
+        │   │       │   ├── rights: (length: 0)
+        │   │       │   ├── lparen_loc: (9,4)-(9,5) = "("
+        │   │       │   └── rparen_loc: (9,9)-(9,10) = ")"
+        │   │       ├── collection:
+        │   │       │   @ CallNode (location: (9,14)-(9,19))
+        │   │       │   ├── flags: variable_call, ignore_visibility
+        │   │       │   ├── receiver: ∅
+        │   │       │   ├── call_operator_loc: ∅
+        │   │       │   ├── name: :pairs
+        │   │       │   ├── message_loc: (9,14)-(9,19) = "pairs"
+        │   │       │   ├── opening_loc: ∅
+        │   │       │   ├── arguments: ∅
+        │   │       │   ├── closing_loc: ∅
+        │   │       │   ├── equal_loc: ∅
+        │   │       │   └── block: ∅
+        │   │       ├── guard: ∅
+        │   │       ├── in_keyword_loc: (9,11)-(9,13) = "in"
+        │   │       └── when_keyword_loc: ∅
+        │   ├── statements:
+        │   │   @ StatementsNode (location: (9,25)-(9,30))
+        │   │   ├── flags: ∅
+        │   │   └── body: (length: 1)
+        │   │       └── @ CallNode (location: (9,25)-(9,30))
+        │   │           ├── flags: newline
+        │   │           ├── receiver:
+        │   │           │   @ LocalVariableReadNode (location: (9,25)-(9,26))
+        │   │           │   ├── flags: ∅
+        │   │           │   ├── name: :a
+        │   │           │   └── depth: 0
+        │   │           ├── call_operator_loc: ∅
+        │   │           ├── name: :+
+        │   │           ├── message_loc: (9,27)-(9,28) = "+"
+        │   │           ├── opening_loc: ∅
+        │   │           ├── arguments:
+        │   │           │   @ ArgumentsNode (location: (9,29)-(9,30))
+        │   │           │   ├── flags: ∅
+        │   │           │   └── arguments: (length: 1)
+        │   │           │       └── @ LocalVariableReadNode (location: (9,29)-(9,30))
+        │   │           │           ├── flags: ∅
+        │   │           │           ├── name: :b
+        │   │           │           └── depth: 0
+        │   │           ├── closing_loc: ∅
+        │   │           ├── equal_loc: ∅
+        │   │           └── block: ∅
+        │   ├── for_keyword_loc: (9,0)-(9,3) = "for"
+        │   ├── then_keyword_loc: (9,20)-(9,24) = "then"
+        │   └── end_keyword_loc: (9,31)-(9,34) = "end"
+        ├── @ ForComprehensionNode (location: (11,0)-(11,32))
+        │   ├── flags: newline
+        │   ├── locals: [:a, :b]
+        │   ├── iterators: (length: 1)
+        │   │   └── @ ForComprehensionIteratorNode (location: (11,4)-(11,17))
+        │   │       ├── flags: ∅
+        │   │       ├── locals: [:a, :b]
+        │   │       ├── index:
+        │   │       │   @ MultiTargetNode (location: (11,4)-(11,8))
+        │   │       │   ├── flags: ∅
+        │   │       │   ├── lefts: (length: 2)
+        │   │       │   │   ├── @ LocalVariableTargetNode (location: (11,4)-(11,5))
+        │   │       │   │   │   ├── flags: ∅
+        │   │       │   │   │   ├── name: :a
+        │   │       │   │   │   └── depth: 0
+        │   │       │   │   └── @ LocalVariableTargetNode (location: (11,7)-(11,8))
+        │   │       │   │       ├── flags: ∅
+        │   │       │   │       ├── name: :b
+        │   │       │   │       └── depth: 0
+        │   │       │   ├── rest: ∅
+        │   │       │   ├── rights: (length: 0)
+        │   │       │   ├── lparen_loc: ∅
+        │   │       │   └── rparen_loc: ∅
+        │   │       ├── collection:
+        │   │       │   @ CallNode (location: (11,12)-(11,17))
+        │   │       │   ├── flags: variable_call, ignore_visibility
+        │   │       │   ├── receiver: ∅
+        │   │       │   ├── call_operator_loc: ∅
+        │   │       │   ├── name: :pairs
+        │   │       │   ├── message_loc: (11,12)-(11,17) = "pairs"
+        │   │       │   ├── opening_loc: ∅
+        │   │       │   ├── arguments: ∅
+        │   │       │   ├── closing_loc: ∅
+        │   │       │   ├── equal_loc: ∅
+        │   │       │   └── block: ∅
+        │   │       ├── guard: ∅
+        │   │       ├── in_keyword_loc: (11,9)-(11,11) = "in"
+        │   │       └── when_keyword_loc: ∅
+        │   ├── statements:
+        │   │   @ StatementsNode (location: (11,23)-(11,28))
+        │   │   ├── flags: ∅
+        │   │   └── body: (length: 1)
+        │   │       └── @ CallNode (location: (11,23)-(11,28))
+        │   │           ├── flags: newline
+        │   │           ├── receiver:
+        │   │           │   @ LocalVariableReadNode (location: (11,23)-(11,24))
+        │   │           │   ├── flags: ∅
+        │   │           │   ├── name: :a
+        │   │           │   └── depth: 0
+        │   │           ├── call_operator_loc: ∅
+        │   │           ├── name: :+
+        │   │           ├── message_loc: (11,25)-(11,26) = "+"
+        │   │           ├── opening_loc: ∅
+        │   │           ├── arguments:
+        │   │           │   @ ArgumentsNode (location: (11,27)-(11,28))
+        │   │           │   ├── flags: ∅
+        │   │           │   └── arguments: (length: 1)
+        │   │           │       └── @ LocalVariableReadNode (location: (11,27)-(11,28))
+        │   │           │           ├── flags: ∅
+        │   │           │           ├── name: :b
+        │   │           │           └── depth: 0
+        │   │           ├── closing_loc: ∅
+        │   │           ├── equal_loc: ∅
+        │   │           └── block: ∅
+        │   ├── for_keyword_loc: (11,0)-(11,3) = "for"
+        │   ├── then_keyword_loc: (11,18)-(11,22) = "then"
+        │   └── end_keyword_loc: (11,29)-(11,32) = "end"
+        └── @ ForComprehensionNode (location: (13,0)-(17,3))
+            ├── flags: newline
+            ├── locals: [:x, :y, :z]
+            ├── iterators: (length: 2)
+            │   ├── @ ForComprehensionIteratorNode (location: (13,4)-(13,11))
+            │   │   ├── flags: ∅
+            │   │   ├── locals: [:x, :z]
+            │   │   ├── index:
+            │   │   │   @ LocalVariableTargetNode (location: (13,4)-(13,5))
+            │   │   │   ├── flags: ∅
+            │   │   │   ├── name: :x
+            │   │   │   └── depth: 0
+            │   │   ├── collection:
+            │   │   │   @ CallNode (location: (13,9)-(13,11))
+            │   │   │   ├── flags: variable_call, ignore_visibility
+            │   │   │   ├── receiver: ∅
+            │   │   │   ├── call_operator_loc: ∅
+            │   │   │   ├── name: :xs
+            │   │   │   ├── message_loc: (13,9)-(13,11) = "xs"
+            │   │   │   ├── opening_loc: ∅
+            │   │   │   ├── arguments: ∅
+            │   │   │   ├── closing_loc: ∅
+            │   │   │   ├── equal_loc: ∅
+            │   │   │   └── block: ∅
+            │   │   ├── guard: ∅
+            │   │   ├── in_keyword_loc: (13,6)-(13,8) = "in"
+            │   │   └── when_keyword_loc: ∅
+            │   └── @ ForComprehensionIteratorNode (location: (14,4)-(14,11))
+            │       ├── flags: ∅
+            │       ├── locals: [:y, :z]
+            │       ├── index:
+            │       │   @ LocalVariableTargetNode (location: (14,4)-(14,5))
+            │       │   ├── flags: ∅
+            │       │   ├── name: :y
+            │       │   └── depth: 0
+            │       ├── collection:
+            │       │   @ CallNode (location: (14,9)-(14,11))
+            │       │   ├── flags: variable_call, ignore_visibility
+            │       │   ├── receiver: ∅
+            │       │   ├── call_operator_loc: ∅
+            │       │   ├── name: :ys
+            │       │   ├── message_loc: (14,9)-(14,11) = "ys"
+            │       │   ├── opening_loc: ∅
+            │       │   ├── arguments: ∅
+            │       │   ├── closing_loc: ∅
+            │       │   ├── equal_loc: ∅
+            │       │   └── block: ∅
+            │       ├── guard: ∅
+            │       ├── in_keyword_loc: (14,6)-(14,8) = "in"
+            │       └── when_keyword_loc: ∅
+            ├── statements:
+            │   @ StatementsNode (location: (15,2)-(16,11))
+            │   ├── flags: ∅
+            │   └── body: (length: 2)
+            │       ├── @ LocalVariableWriteNode (location: (15,2)-(15,11))
+            │       │   ├── flags: newline
+            │       │   ├── name: :z
+            │       │   ├── depth: 0
+            │       │   ├── name_loc: (15,2)-(15,3) = "z"
+            │       │   ├── value:
+            │       │   │   @ CallNode (location: (15,6)-(15,11))
+            │       │   │   ├── flags: ∅
+            │       │   │   ├── receiver:
+            │       │   │   │   @ LocalVariableReadNode (location: (15,6)-(15,7))
+            │       │   │   │   ├── flags: ∅
+            │       │   │   │   ├── name: :x
+            │       │   │   │   └── depth: 0
+            │       │   │   ├── call_operator_loc: ∅
+            │       │   │   ├── name: :+
+            │       │   │   ├── message_loc: (15,8)-(15,9) = "+"
+            │       │   │   ├── opening_loc: ∅
+            │       │   │   ├── arguments:
+            │       │   │   │   @ ArgumentsNode (location: (15,10)-(15,11))
+            │       │   │   │   ├── flags: ∅
+            │       │   │   │   └── arguments: (length: 1)
+            │       │   │   │       └── @ LocalVariableReadNode (location: (15,10)-(15,11))
+            │       │   │   │           ├── flags: ∅
+            │       │   │   │           ├── name: :y
+            │       │   │   │           └── depth: 0
+            │       │   │   ├── closing_loc: ∅
+            │       │   │   ├── equal_loc: ∅
+            │       │   │   └── block: ∅
+            │       │   └── operator_loc: (15,4)-(15,5) = "="
+            │       └── @ ArrayNode (location: (16,2)-(16,11))
+            │           ├── flags: newline
+            │           ├── elements: (length: 3)
+            │           │   ├── @ LocalVariableReadNode (location: (16,3)-(16,4))
+            │           │   │   ├── flags: ∅
+            │           │   │   ├── name: :x
+            │           │   │   └── depth: 0
+            │           │   ├── @ LocalVariableReadNode (location: (16,6)-(16,7))
+            │           │   │   ├── flags: ∅
+            │           │   │   ├── name: :y
+            │           │   │   └── depth: 0
+            │           │   └── @ LocalVariableReadNode (location: (16,9)-(16,10))
+            │           │       ├── flags: ∅
+            │           │       ├── name: :z
+            │           │       └── depth: 0
+            │           ├── opening_loc: (16,2)-(16,3) = "["
+            │           └── closing_loc: (16,10)-(16,11) = "]"
+            ├── for_keyword_loc: (13,0)-(13,3) = "for"
+            ├── then_keyword_loc: (14,12)-(14,16) = "then"
+            └── end_keyword_loc: (17,0)-(17,3) = "end"
