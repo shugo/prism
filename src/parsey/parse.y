@@ -289,7 +289,8 @@ typedef int st_index_t;
 /* Interning. The second argument to pm_yid_intern is the constant pool the
  * prism parser owns; `p` is in scope at every use site, as it is for CRuby's
  * own implicit-parser macros like tok(). */
-#define rb_intern3(name, len, enc) pm_yid_intern(&p->pm->metadata_arena, &p->pm->constant_pool, (const uint8_t *) (name), (size_t) (len), (enc))
+static ID pm_yintern(struct parser_params *p, const char *name, size_t len, const pm_encoding_t *enc);
+#define rb_intern3(name, len, enc) pm_yintern(p, (const char *) (name), (size_t) (len), (enc))
 #define rb_intern(name) rb_intern3((name), strlen(name), p->enc)
 #define rb_id_attrset(id) pm_yid_attrset(&p->pm->metadata_arena, &p->pm->constant_pool, (id))
 #define is_notop_id(id) pm_yid_is_notop(id)
@@ -1084,6 +1085,25 @@ after_shift(struct parser_params *p)
 {
 }
 
+/* Interning: almost every name becomes a dynamic ID over the constant pool,
+ * but the spellings the parser machinery compares against static IDs must
+ * intern to those IDs: the numbered parameters and `it`. */
+static ID
+pm_yintern(struct parser_params *p, const char *name, size_t len, const pm_encoding_t *enc)
+{
+    if (len == 2) {
+        if (name[0] == '_' && name[1] >= '1' && name[1] <= '9') {
+            static const ID numparams[9] = {
+                idNUMPARAM_1, idNUMPARAM_2, idNUMPARAM_3, idNUMPARAM_4, idNUMPARAM_5,
+                idNUMPARAM_6, idNUMPARAM_7, idNUMPARAM_8, idNUMPARAM_9
+            };
+            return numparams[name[1] - '1'];
+        }
+        if (name[0] == 'i' && name[1] == 't') return idIt;
+    }
+    return pm_yid_intern(&p->pm->metadata_arena, &p->pm->constant_pool, (const uint8_t *) name, len, enc);
+}
+
 static void
 before_reduce(int len, struct parser_params *p)
 {
@@ -1453,6 +1473,7 @@ static NODE *pm_yassoc_splat(struct parser_params *p, NODE *value, const YYLTYPE
 static NODE *pm_ylabel_symbol(struct parser_params *p, ID label, const YYLTYPE *loc);
 static NODE *pm_yhash_braces(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static NODE *pm_ytarget(struct parser_params *p, NODE *node);
+static NODE *pm_yfor(struct parser_params *p, NODE *index, NODE *collection, NODE *body, const YYLTYPE *loc, const YYLTYPE *for_loc, const YYLTYPE *in_loc, const YYLTYPE *end_loc);
 static NODE *pm_yarray_finalize(struct parser_params *p, NODE *node);
 static void pm_ymulti_parens(struct parser_params *p, NODE *node, const YYLTYPE *lparen, const YYLTYPE *rparen);
 static NODE *pm_yensure(struct parser_params *p, NODE *body, const YYLTYPE *ensure_loc, const YYLTYPE *loc);
@@ -1702,6 +1723,11 @@ set_embraced_location(NODE *node, const rb_code_location_t *beg, const rb_code_l
         if (block->body != NULL && PM_NODE_TYPE_P(block->body, PM_BEGIN_NODE)) {
             pm_ybegin_stamp_end(block->body, block->closing_loc);
             block->body->location = block->base.location;
+        }
+        if (block->parameters != NULL &&
+            (PM_NODE_TYPE_P(block->parameters, PM_NUMBERED_PARAMETERS_NODE) || PM_NODE_TYPE_P(block->parameters, PM_IT_PARAMETERS_NODE))) {
+            /* these span the whole block, braces included */
+            block->parameters->location = block->base.location;
         }
     }
 }
@@ -3941,41 +3967,11 @@ primary		: inline_primary
                 {
                     restore_block_exit(p, $k_for);
                     /*
-                     *  for a, b, c in e
-                     *  #=>
-                     *  e.each{|*x| a, b, c = x}
-                     *
-                     *  for a in e
-                     *  #=>
-                     *  e.each{|x| a, = x}
+                     * CRuby desugars `for a in e` to e.each{|x| a, = x} with
+                     * an internal variable; prism has a dedicated node whose
+                     * index is the for_var re-expressed as a target.
                      */
-                    ID id = internal_id(p);
-                    rb_node_args_aux_t *m = NEW_ARGS_AUX(0, 0, &NULL_LOC);
-                    rb_node_args_t *args;
-                    NODE *scope, *internal_var = NEW_DVAR(id, &@for_var);
-                    rb_ast_id_table_t *tbl = NULL;
-                    YSTUB("for loop"); /* PORTME: single-slot local table for the internal variable */
-
-                    switch (nd_type($for_var)) {
-                      case NODE_LASGN:
-                      case NODE_DASGN: /* e.each {|internal_var| a = internal_var; ... } */
-                        set_nd_value(p, $for_var, internal_var);
-                        id = 0;
-                        YSTUB("grammar"); /* PORTME: m->nd_plen = 1; */
-                        YSTUB("grammar"); /* PORTME: m->nd_next = $for_var; */
-                        break;
-                      case NODE_MASGN: /* e.each {|*internal_var| a, b, c = (internal_var.length == 1 && Array === (tmp = internal_var[0]) ? tmp : internal_var); ... } */
-                        YSTUB("grammar"); /* PORTME: m->nd_next = node_assign(p, $for_var, NEW_FOR_MASGN(internal_var, &@for_var), NO_LEX_CTXT, &@for_var */
-                        break;
-                      default: /* e.each {|*internal_var| @a, B, c[1], d.attr = internal_val; ... } */
-                        YSTUB("grammar"); /* PORTME: m->nd_next = node_assign(p, (NODE *)NEW_MASGN(NEW_LIST($for_var, &@for_var), 0, &@for_var), internal */
-                    }
-                    /* {|*internal_id| <m> = internal_id; ... } */
-                    args = new_args(p, m, 0, id, 0, new_empty_args_tail(p, &@for_var), &@for_var);
-                    scope = NEW_SCOPE2(tbl, args, $compstmt, NULL, &@$);
-                    YYLTYPE do_keyword_loc = $do == keyword_do_cond ? @do : NULL_LOC;
-                    $$ = NEW_FOR($expr_value, scope, &@$, &@k_for, &@keyword_in, &do_keyword_loc, &@k_end);
-                    YSTUB("grammar"); /* PORTME: RNODE_SCOPE(scope)->nd_parent = $$; */
+                    $$ = pm_yfor(p, pm_ytarget(p, (NODE *) $for_var), $expr_value, $compstmt, &@$, &@k_for, &@keyword_in, &@k_end);
                     fixpos($$, $for_var);
                 }
             | k_class cpath superclass
@@ -9908,6 +9904,16 @@ pm_yid2const(struct parser_params *p, ID id)
     const char *known = NULL;
     switch (id) {
       case idCall: known = "call"; break;
+      case idNUMPARAM_1: known = "_1"; break;
+      case idNUMPARAM_2: known = "_2"; break;
+      case idNUMPARAM_3: known = "_3"; break;
+      case idNUMPARAM_4: known = "_4"; break;
+      case idNUMPARAM_5: known = "_5"; break;
+      case idNUMPARAM_6: known = "_6"; break;
+      case idNUMPARAM_7: known = "_7"; break;
+      case idNUMPARAM_8: known = "_8"; break;
+      case idNUMPARAM_9: known = "_9"; break;
+      case idIt: known = "it"; break;
       default: break;
     }
 
@@ -10132,6 +10138,8 @@ pm_ylocals(struct parser_params *p)
             /* anonymous forwarding markers (*, **, &, ...) are not locals */
             ID id = tbl->ids[i];
             if (id == idFWD_REST || id == idFWD_KWREST || id == idFWD_BLOCK || id == idFWD_ALL) continue;
+            /* the implicit it parameter is not a named local */
+            if (id == idItImplicit) continue;
             pm_constant_id_list_append(&p->pm->metadata_arena, &locals, pm_yid2const(p, id));
         }
         xfree(tbl);
@@ -10176,6 +10184,22 @@ pm_ymulti_parens(struct parser_params *p, NODE *node, const YYLTYPE *lparen, con
     target->lparen_loc = pm_yloc(lparen);
     target->rparen_loc = pm_yloc(rparen);
     target->base.location = (pm_location_t) { lparen->beg, rparen->end - lparen->beg };
+}
+
+/* A for loop; the do keyword, if written, sits in the pending slot the
+ * do rule parks (the same one while/until consume). */
+static NODE *
+pm_yfor(struct parser_params *p, NODE *index, NODE *collection, NODE *body, const YYLTYPE *loc, const YYLTYPE *for_loc, const YYLTYPE *in_loc, const YYLTYPE *end_loc)
+{
+    pm_location_t do_keyword = { 0 };
+    if (p->ydo.set) {
+        do_keyword = pm_yloc(&p->ydo.loc);
+        p->ydo.set = 0;
+    }
+    return (NODE *) pm_for_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        index, collection, pm_ystatements_opt(p, body),
+        pm_yloc(for_loc), pm_yloc(in_loc), do_keyword, pm_yloc(end_loc));
 }
 
 /* A write node built by assignable() re-expressed as prism's target node,
@@ -11056,10 +11080,17 @@ rb_node_iter_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_body
     else {
         body = (pm_node_t *) pm_ystatements_opt(p, nd_body);
     }
-    return (rb_node_iter_t *) pm_block_node_new(
+    pm_node_t *parameters = (pm_node_t *) nd_args;
+    rb_node_iter_t *iter = (rb_node_iter_t *) pm_block_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
-        pm_ylocals(p), (pm_node_t *) nd_args, body,
+        pm_ylocals(p), parameters, body,
         (pm_location_t) { 0 }, (pm_location_t) { 0 });
+    if (parameters != NULL &&
+        (PM_NODE_TYPE_P(parameters, PM_NUMBERED_PARAMETERS_NODE) || PM_NODE_TYPE_P(parameters, PM_IT_PARAMETERS_NODE))) {
+        /* these span the whole block, known only now */
+        parameters->location = ((NODE *) iter)->location;
+    }
+    return iter;
 }
 
 static rb_node_lambda_t *
@@ -11078,10 +11109,16 @@ rb_node_lambda_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_bo
         body = (pm_node_t *) pm_ystatements_opt(p, nd_body);
     }
 
-    return (rb_node_lambda_t *) pm_lambda_node_new(
+    pm_node_t *parameters = (pm_node_t *) nd_args;
+    rb_node_lambda_t *lambda = (rb_node_lambda_t *) pm_lambda_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
         pm_ylocals(p), pm_yloc(operator_loc), pm_yloc(opening_loc), pm_yloc(closing_loc),
-        (pm_node_t *) nd_args, body);
+        parameters, body);
+    if (parameters != NULL &&
+        (PM_NODE_TYPE_P(parameters, PM_NUMBERED_PARAMETERS_NODE) || PM_NODE_TYPE_P(parameters, PM_IT_PARAMETERS_NODE))) {
+        parameters->location = ((NODE *) lambda)->location;
+    }
+    return lambda;
 }
 
 static rb_node_case_t *
@@ -11487,6 +11524,9 @@ rb_node_lvar_new(struct parser_params *p, ID nd_vid, const YYLTYPE *loc)
 static rb_node_dvar_t *
 rb_node_dvar_new(struct parser_params *p, ID nd_vid, const YYLTYPE *loc)
 {
+    if (nd_vid == idItImplicit) {
+        return (rb_node_dvar_t *) pm_it_local_variable_read_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc));
+    }
     return (rb_node_dvar_t *) pm_local_variable_read_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), YID2CONST(nd_vid), pm_ydvar_depth(p, nd_vid));
 }
 
@@ -12551,21 +12591,36 @@ past_dvar_p(struct parser_params *p, ID id)
 static int
 numparam_nested_p(struct parser_params *p)
 {
-    YSTUB("numparam_nested_p");
+    struct local_vars *local = p->lvtbl;
+    NODE *outer = local->numparam.outer;
+    NODE *inner = local->numparam.inner;
+    if (outer || inner) {
+        compile_error(p, "numbered parameter is already used in %s block",
+                      outer ? "outer" : "inner");
+        return 1;
+    }
     return 0;
 }
 
 static int
 numparam_used_p(struct parser_params *p)
 {
-    YSTUB("numparam_used_p");
+    NODE *numparam = p->lvtbl->numparam.current;
+    if (numparam) {
+        compile_error(p, "'it' is not allowed when a numbered parameter is already used");
+        return 1;
+    }
     return 0;
 }
 
 static int
 it_used_p(struct parser_params *p)
 {
-    YSTUB("it_used_p");
+    NODE *it = p->lvtbl->it;
+    if (it) {
+        compile_error(p, "numbered parameters are not allowed when 'it' is already used");
+        return 1;
+    }
     return 0;
 }
 
@@ -13507,8 +13562,14 @@ new_args_tail(struct parser_params *p, rb_node_kw_arg_t *kw_args, ID kw_rest_arg
 static rb_node_args_t *
 args_with_numbered(struct parser_params *p, rb_node_args_t *args, int max_numparam, ID it_id)
 {
-    if (max_numparam <= 0 && it_id == 0) return args;
-    YSTUB("args_with_numbered"); /* PORTME: numbered parameters and it */
+    if (max_numparam > 0) {
+        return (rb_node_args_t *) pm_numbered_parameters_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, (pm_location_t) { 0 }, (uint8_t) max_numparam);
+    }
+    if (it_id != 0) {
+        return (rb_node_args_t *) pm_it_parameters_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, (pm_location_t) { 0 });
+    }
     return args;
 }
 
