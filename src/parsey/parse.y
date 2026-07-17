@@ -912,7 +912,8 @@ typedef struct token_info {
 } token_info;
 
 typedef struct end_expect_token_locations {
-    const rb_code_position_t *pos;
+    uint32_t pos;		/* offset of the opening keyword */
+    uint32_t line_start;	/* offset of the start of its line */
     struct end_expect_token_locations *prev;
 } end_expect_token_locations_t;
 
@@ -996,6 +997,14 @@ struct parser_params {
      * consume its arguments; prism hangs it on the call, not the list. */
     NODE *yblock_pass;
 
+    /* fork: an unported construct was hit (YSTUB); unlike a syntax error,
+     * the tree may hold NULLs where required children belong. */
+    unsigned int ystub_p: 1;
+
+    /* fork: the top-level statements reduced so far; when the parser aborts
+     * beyond recovery, this still holds everything before the error. */
+    NODE *ytop_progress;
+
     /* fork: a heredoc opener span waiting to become the deferred END
      * token's location (see pm_yheredoc_end_capture). */
     YYLTYPE yheredoc_opener;
@@ -1035,6 +1044,7 @@ struct parser_params {
     int ruby_sourceline;	/* current line no. */
     rb_encoding *enc;
     token_info *token_info;
+    end_expect_token_locations_t *end_expect_token_locations;
     st_table *case_labels;
     rb_node_exits_t *exits;
 
@@ -1169,22 +1179,39 @@ debug_end_expect_token_locations(struct parser_params *p, const char *name)
     /* debug output is not ported */
 }
 
+/* The end-expecting constructs currently open, so end-of-input can close
+ * them with dummy end tokens and keep a partial tree. Upstream gates this
+ * behind the error_tolerant option; the fork is always tolerant, as the
+ * hand-written parser is. */
 static void
-push_end_expect_token_locations(struct parser_params *p, const rb_code_position_t *pos)
+push_end_expect_token_locations(struct parser_params *p, const YYLTYPE *loc)
 {
-    /* error tolerance is not ported */
+    end_expect_token_locations_t *locations = xmalloc(sizeof(end_expect_token_locations_t));
+    locations->pos = loc->beg;
+
+    /* the start of the keyword's line, for the indentation heuristic */
+    uint32_t line_start = loc->beg;
+    while (line_start > 0 && p->pm->start[line_start - 1] != '\n') line_start--;
+    locations->line_start = line_start;
+
+    locations->prev = p->end_expect_token_locations;
+    p->end_expect_token_locations = locations;
 }
 
 static void
 pop_end_expect_token_locations(struct parser_params *p)
 {
-    /* error tolerance is not ported */
+    if (!p->end_expect_token_locations) return;
+
+    end_expect_token_locations_t *locations = p->end_expect_token_locations->prev;
+    xfree(p->end_expect_token_locations);
+    p->end_expect_token_locations = locations;
 }
 
 static end_expect_token_locations_t *
 peek_end_expect_token_locations(struct parser_params *p)
 {
-    return NULL;
+    return p->end_expect_token_locations;
 }
 
 static const char *
@@ -2827,10 +2854,12 @@ top_stmts	: none
                 | top_stmt
                     {
                         $$ = newline_node($1);
+                        p->ytop_progress = $$;
                     }
                 | top_stmts terms top_stmt
                     {
                         $$ = block_append(p, $1, newline_node($3));
+                        p->ytop_progress = $$;
                     }
                 ;
 
@@ -4114,6 +4143,7 @@ primary		: inline_primary
                     /* fork: claim the parameter parens before the body's
                      * calls can overwrite the pending slot */
                     pm_ydef_parens(p, (NODE *) $head->nd_def);
+                    push_end_expect_token_locations(p, &@head);
                 }
               bodystmt
               k_end
@@ -4128,6 +4158,7 @@ primary		: inline_primary
                     /* fork: claim the parameter parens before the body's
                      * calls can overwrite the pending slot */
                     pm_ydef_parens(p, (NODE *) $head->nd_def);
+                    push_end_expect_token_locations(p, &@head);
                 }
               bodystmt
               k_end
@@ -4168,6 +4199,7 @@ primary_value	: value_expr(primary)
 k_begin		: keyword_begin
                     {
                         token_info_push(p, "begin", &@$);
+                        push_end_expect_token_locations(p, &@1);
                     }
                 ;
 
@@ -4175,6 +4207,7 @@ k_if		: keyword_if
                     {
                         WARN_EOL("if");
                         token_info_push(p, "if", &@$);
+                        push_end_expect_token_locations(p, &@1);
                         if (p->token_info && p->token_info->nonspc &&
                             p->token_info->next && !strcmp(p->token_info->next->token, "else")) {
                             const char *tok = p->lex.ptok - rb_strlen_lit("if");
@@ -4191,6 +4224,7 @@ k_if		: keyword_if
 k_unless	: keyword_unless
                     {
                         token_info_push(p, "unless", &@$);
+                        push_end_expect_token_locations(p, &@1);
                     }
                 ;
 
@@ -4198,6 +4232,7 @@ k_while		: keyword_while[kw] allow_exits
                     {
                         $$ = $allow_exits;
                         token_info_push(p, "while", &@$);
+                        push_end_expect_token_locations(p, &@kw);
                     }
                 ;
 
@@ -4205,12 +4240,14 @@ k_until		: keyword_until[kw] allow_exits
                     {
                         $$ = $allow_exits;
                         token_info_push(p, "until", &@$);
+                        push_end_expect_token_locations(p, &@kw);
                     }
                 ;
 
 k_case		: keyword_case
                     {
                         token_info_push(p, "case", &@$);
+                        push_end_expect_token_locations(p, &@1);
                     }
                 ;
 
@@ -4218,12 +4255,14 @@ k_for		: keyword_for[kw] allow_exits
                     {
                         $$ = $allow_exits;
                         token_info_push(p, "for", &@$);
+                        push_end_expect_token_locations(p, &@kw);
                     }
                 ;
 
 k_class		: keyword_class
                     {
                         token_info_push(p, "class", &@$);
+                        push_end_expect_token_locations(p, &@1);
                         $$ = p->ctxt;
                         p->ctxt.in_rescue = before_rescue;
                     }
@@ -4232,6 +4271,7 @@ k_class		: keyword_class
 k_module	: keyword_module
                     {
                         token_info_push(p, "module", &@$);
+                        push_end_expect_token_locations(p, &@1);
                         $$ = p->ctxt;
                         p->ctxt.in_rescue = before_rescue;
                     }
@@ -4248,12 +4288,14 @@ k_def		: keyword_def
 k_do		: keyword_do
                     {
                         token_info_push(p, "do", &@$);
+                        push_end_expect_token_locations(p, &@1);
                     }
                 ;
 
 k_do_block	: keyword_do_block
                     {
                         token_info_push(p, "do", &@$);
+                        push_end_expect_token_locations(p, &@1);
                     }
                 ;
 
@@ -4559,6 +4601,7 @@ lambda_body	: tLAMBEG compstmt(stmts) '}'
                     }
                 | keyword_do_LAMBDA
                     {
+                        push_end_expect_token_locations(p, &@1);
                     }
                   bodystmt k_end
                     {
@@ -9033,24 +9076,16 @@ parse_ident(struct parser_params *p, int c, int cmd_state)
     }
 
     if (peek_end_expect_token_locations(p)) {
-        const rb_code_position_t *end_pos;
-        int lineno, column;
-        int beg_pos = (int)(p->lex.ptok - p->lex.pbeg);
+        const end_expect_token_locations_t *open_loc = peek_end_expect_token_locations(p);
+        long beg_pos = p->lex.ptok - p->lex.pbeg;
+        long column = (long) (open_loc->pos - open_loc->line_start);
 
-        end_pos = peek_end_expect_token_locations(p)->pos;
-        lineno = end_pos->lineno;
-        column = end_pos->column;
-
-        if (p->debug) {
-            rb_parser_printf(p, "enforce_keyword_end check. current: (%d, %d), peek: (%d, %d)\n",
-                                p->ruby_sourceline, beg_pos, lineno, column);
-        }
-
-        if ((p->ruby_sourceline > lineno) && (beg_pos <= column)) {
+        /* an `end` on a later line, indented at or left of the opening
+         * keyword, closes it even after a dot */
+        if (YOFF(p->lex.pbeg) > open_loc->line_start && beg_pos <= column) {
             const struct kwtable *kw;
 
             if ((IS_lex_state(EXPR_DOT)) && (kw = rb_reserved_word(tok(p), toklen(p))) && (kw && kw->id[0] == keyword_end)) {
-                if (p->debug) rb_parser_printf(p, "enforce_keyword_end is enabled\n");
                 enforce_keyword_end = 1;
             }
         }
@@ -9160,6 +9195,11 @@ parser_yylex(struct parser_params *p)
       case '\032':		/* ^Z */
       case -1:			/* end of script. */
         p->eofp = 1;
+        if (p->end_expect_token_locations) {
+            pop_end_expect_token_locations(p);
+            p->yylloc->beg = p->yylloc->end = YOFF(p->lex.pcur);
+            return tDUMNY_END;
+        }
         /* Set location for end-of-input because dispatch_scan_event is not called. */
         RUBY_SET_YYLLOC(*p->yylloc);
         return END_OF_INPUT;
@@ -15052,8 +15092,65 @@ count_char(const char *str, int c)
 size_t
 rb_yytnamerr(struct parser_params *p, char *yyres, const char *yystr)
 {
-    YSTUB("rb_yytnamerr");
-    return 0;
+    (void) p;
+    if (*yystr == '"') {
+        size_t yyn = 0, bquote = 0;
+        const char *yyp = yystr;
+
+        while (*++yyp) {
+            switch (*yyp) {
+              case '\'':
+                if (!bquote) {
+                    bquote = (size_t) count_char(yyp+1, '\'') + 1;
+                    if (yyres) memcpy(&yyres[yyn], yyp, bquote);
+                    yyn += bquote;
+                    yyp += bquote - 1;
+                    break;
+                }
+                else {
+                    if (bquote && (size_t) count_char(yyp+1, '\'') + 1 == bquote) {
+                        if (yyres) memcpy(yyres + yyn, yyp, bquote);
+                        yyn += bquote;
+                        yyp += bquote - 1;
+                        bquote = 0;
+                        break;
+                    }
+                    if (yyp[1] && yyp[1] != '\'' && yyp[2] == '\'') {
+                        if (yyres) memcpy(yyres + yyn, yyp, 3);
+                        yyn += 3;
+                        yyp += 2;
+                        break;
+                    }
+                    goto do_not_strip_quotes;
+                }
+
+              case ',':
+                goto do_not_strip_quotes;
+
+              case '\\':
+                if (*++yyp != '\\')
+                    goto do_not_strip_quotes;
+                /* Fall through.  */
+              default:
+                if (yyres)
+                    yyres[yyn] = *yyp;
+                yyn++;
+                break;
+
+              case '"':
+              case '\0':
+                if (yyres)
+                    yyres[yyn] = '\0';
+                return yyn;
+            }
+        }
+      do_not_strip_quotes: ;
+    }
+
+    if (!yyres) return strlen(yystr);
+
+    strcpy(yyres, yystr);
+    return strlen(yyres);
 }
 
 /*
@@ -15078,6 +15175,7 @@ pm_yparse_stub(struct parser_params *p, const char *name)
 {
     if (p->error_p) return;
     p->error_p = 1;
+    p->ystub_p = 1;
 
     char message[128];
     snprintf(message, sizeof(message), "the parse_y backend cannot build this yet: %s", name);
@@ -15154,10 +15252,14 @@ pm_yparse(pm_parser_t *pm)
     parser_prepare(p);
     yyparse(p);
 
-    /* A reported error means some action could not build its node; anything
-     * downstream of that point may hold NULLs where required children belong,
-     * so only the guaranteed-consistent empty program is safe to hand out. */
-    pm_node_t *tree = pm_yparse_program(p, p->error_p ? NULL : p->eval_tree);
+    /* An unported construct (YSTUB) means some action could not build its
+     * node and the tree may hold NULLs where required children belong: only
+     * the guaranteed-consistent empty program is safe then. A plain syntax
+     * error keeps the partial tree — the grammar's error productions reduce
+     * the broken statement to an ErrorRecoveryNode and parsing continues. */
+    NODE *result = p->eval_tree;
+    if (result == NULL) result = p->ytop_progress;
+    pm_node_t *tree = pm_yparse_program(p, p->ystub_p ? NULL : result);
 
     /* Everything below is transient state the parse allocated outside the
      * arenas; the tree itself is arena-allocated and survives. */
@@ -15169,6 +15271,9 @@ pm_yparse(pm_parser_t *pm)
     }
     while (p->token_info) {
         token_info_pop(p, "unclosed token", &NULL_LOC);
+    }
+    while (p->end_expect_token_locations) {
+        pop_end_expect_token_locations(p);
     }
 
     return tree;
@@ -15268,6 +15373,17 @@ parser_yyerror(struct parser_params *p, const YYLTYPE *yylloc, const char *msg)
         yylloc->beg, yylloc->end - yylloc->beg,
         PM_ERR_PARSEY_SYNTAX, msg);
     p->error_p = 1;
+
+    /* drop pending fragments: after recovery they would attach to whatever
+     * construct happens to complete next */
+    p->yparens.set = 0;
+    p->yfparens.set = 0;
+    p->ydo.set = 0;
+    p->yheredoc.set = 0;
+    p->yblock_pass = NULL;
+    p->yrest_param = NULL;
+    p->ykwrest_param = NULL;
+    p->yblock_param = NULL;
     return 0;
 }
 
