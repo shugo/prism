@@ -67,16 +67,8 @@ namespace :parsey do
   end
 end
 
-# Regenerate the parser only when the grammar has actually changed and lrama is
-# available, so that a plain `rake compile` works without lrama installed.
-file PARSEY_SOURCE => [PARSEY_GRAMMAR, PARSEY_ID2TOKEN, PARSEY_IDDEF] do
-  if parsey_lrama_command
-    Rake::Task["parsey:generate"].invoke
-  else
-    warn "#{PARSEY_GRAMMAR} is newer than #{PARSEY_SOURCE} but lrama was not found; using the checked-in #{PARSEY_SOURCE}."
-  end
-end
-
-file PARSEY_HEADER => PARSEY_SOURCE
-
-task compile: [PARSEY_SOURCE, PARSEY_HEADER]
+# The checked-in parser is used as-is: a fresh checkout has arbitrary mtimes,
+# so wiring regeneration into `rake compile` through file tasks fires it (or
+# fails without lrama) essentially at random. Regenerate explicitly with
+# `rake parsey:generate` when editing the grammar; CI keeps the two in sync by
+# regenerating and diffing.

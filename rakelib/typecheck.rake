@@ -388,6 +388,7 @@ namespace :typecheck do
       --ignore=rakelib/
       --ignore=Rakefile
       --ignore=top-100-gems/
+      --ignore=src/parsey/tool/
       #{Dir.glob("*.rb").map { |f| "--ignore=/#{f}" }.join("\n")}
       # Treat all files as "typed: true" by default
       --typed=true

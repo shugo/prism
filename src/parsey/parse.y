@@ -4340,7 +4340,9 @@ k_else		: keyword_else
                         int same = ptinfo_beg && strcmp(ptinfo_beg->token, "case") != 0;
                         token_info_warn(p, "else", p->token_info, same, &@$);
                         if (same) {
-                            token_info e;
+                            /* token_info_setup is inert in the fork, so the
+                             * struct must not start uninitialized */
+                            token_info e = { 0 };
                             e.next = ptinfo_beg->next;
                             e.token = "else";
                             token_info_setup(&e, p->lex.pbeg, &@$);

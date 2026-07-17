@@ -46,6 +46,15 @@ jobs:
           fetch-depth: 1
       - run: tool/sync_default_gems.rb prism
         working-directory: ruby/ruby
+      - name: Add the parse.y backend to CRuby's prism build
+        # CRuby's common.mk lists the prism objects explicitly and does not
+        # know about the parse.y backend yet; patch the synced build so the
+        # backend links (this is the change CRuby itself would carry).
+        run: |
+          ruby -i -pe 'sub(/prism\/tokens\.\$\(OBJEXT\)/) { "prism/parsey/parse.$(OBJEXT) \\\n\t\tprism/parsey/yid.$(OBJEXT) \\\n\t\tprism/parsey/ystring.$(OBJEXT) \\\n\t\t#{$&}" }' common.mk
+          ruby -i -pe 'gsub(/\$\(PRISM_BUILD_DIR\)\/util\/\.time/) { "#{$&} $(PRISM_BUILD_DIR)/parsey/.time" }' common.mk
+          grep -n "parsey" common.mk
+        working-directory: ruby/ruby
       - name: Build Ruby
         run: |
           ruby tool/downloader.rb -d tool -e gnu config.guess config.sub
