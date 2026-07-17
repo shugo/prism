@@ -19,3 +19,6 @@ platforms :mri, :windows do
 end
 
 gem "onigmo", platforms: :ruby
+
+# The parse.y backend's parser generator, needed only to edit its grammar.
+gem "lrama", "0.8.0"

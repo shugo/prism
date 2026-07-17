@@ -1,0 +1,96 @@
+name: parsey
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (Ruby ${{ matrix.ruby }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        ruby: ["3.4", "4.0"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - name: Compile
+        run: bundle exec rake compile
+      - name: Test (includes the parse.y fixture equivalence ratchet)
+        run: bundle exec rake test
+      - name: C unit tests
+        run: make test-parsey
+
+  generate:
+    name: generated parser is current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Regenerate the parser from the grammar
+        run: bundle exec rake parsey:generate
+      - name: Check that the checked-in parser matches
+        run: git diff --exit-code src/parsey/parse.c src/parsey/parse.h
+
+  sanitize:
+    name: address/UB sanitizers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Generate templated sources
+        run: bundle exec rake templates
+      - name: Build and run the C tests under the sanitizers
+        run: |
+          set -eu
+          mkdir -p build/sanitize
+          for source in test/prism/parsey/*.c; do
+            bin="build/sanitize/$(basename "$source" .c)"
+            cc -fsanitize=address,undefined -fno-sanitize-recover=all \
+               -g -O1 -std=c99 -D_DEFAULT_SOURCE \
+               -Iinclude -Isrc/parsey \
+               src/*.c src/*/*.c "$source" -o "$bin"
+            # AddressSanitizer occasionally fails to start on some kernels
+            # (spurious DEADLYSIGNAL loops before main); retry a few times.
+            for attempt in 1 2 3 4 5; do
+              if timeout 120 "$bin"; then
+                break
+              elif [ "$attempt" = 5 ]; then
+                echo "$bin failed"
+                exit 1
+              fi
+              echo "retrying $bin (attempt $attempt hit an ASan startup failure)"
+            done
+          done
+
+  tolerance:
+    name: error-tolerance metrics (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Compile
+        run: bundle exec rake compile
+      - name: Recovery quality vs the hand-written parser
+        run: ruby -Ilib test/prism/parsey/tolerance_bench.rb
