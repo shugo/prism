@@ -1414,6 +1414,7 @@ static NODE *pm_yrescue_finish(struct parser_params *p, NODE *node, const YYLTYP
 static NODE *pm_yrescue_modifier(struct parser_params *p, NODE *expr, NODE *fallback, const YYLTYPE *keyword_loc, const YYLTYPE *loc);
 static NODE *pm_yblock_params(struct parser_params *p, NODE *params, NODE *block_locals, const YYLTYPE *opening, const YYLTYPE *closing);
 static NODE *pm_yistr(struct parser_params *p, NODE *part);
+static NODE *pm_yindex_call(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static void pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -1736,7 +1737,7 @@ static NODE *attrset(struct parser_params*,NODE*,ID,ID,const YYLTYPE*);
 static VALUE rb_backref_error(struct parser_params*,NODE*);
 static NODE *node_assign(struct parser_params*,NODE*,NODE*,struct lex_context,const YYLTYPE*);
 
-static NODE *new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_context, const YYLTYPE *loc);
+static NODE *new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_context, const YYLTYPE *op_loc, const YYLTYPE *loc);
 static NODE *new_ary_op_assign(struct parser_params *p, NODE *ary, NODE *args, ID op, NODE *rhs, const YYLTYPE *args_loc, const YYLTYPE *loc, const YYLTYPE *call_operator_loc, const YYLTYPE *opening_loc, const YYLTYPE *closing_loc, const YYLTYPE *binary_operator_loc);
 static NODE *new_attr_op_assign(struct parser_params *p, NODE *lhs, ID atype, ID attr, ID op, NODE *rhs, const YYLTYPE *loc, const YYLTYPE *call_operator_loc, const YYLTYPE *message_loc, const YYLTYPE *binary_operator_loc);
 static NODE *new_const_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_context, const YYLTYPE *loc);
@@ -2539,7 +2540,7 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
 %rule op_asgn(rhs) <node>
                 : var_lhs tOP_ASGN lex_ctxt rhs
                     {
-                        $$ = new_op_assign(p, $var_lhs, $tOP_ASGN, $rhs, $lex_ctxt, &@$);
+                        $$ = new_op_assign(p, $var_lhs, $tOP_ASGN, $rhs, $lex_ctxt, &@tOP_ASGN, &@$);
                     }
                 | primary_value '['[lbracket] opt_call_args rbracket tOP_ASGN lex_ctxt rhs
                     {
@@ -3155,6 +3156,7 @@ mlhs_node	: user_or_keyword_variable
                 | primary_value '[' opt_call_args rbracket
                     {
                         $$ = aryset(p, $1, $3, &@$);
+                        $$ = pm_yindex_call(p, $$, &@2, &@4);
                     }
                 | primary_value call_op ident_or_const
                     {
@@ -3187,6 +3189,7 @@ lhs		: user_or_keyword_variable
                 | primary_value '[' opt_call_args rbracket
                     {
                         $$ = aryset(p, $1, $3, &@$);
+                        $$ = pm_yindex_call(p, $$, &@2, &@4);
                     }
                 | primary_value call_op ident_or_const
                     {
@@ -4463,6 +4466,7 @@ method_call	: fcall paren_args
                 | primary_value '[' opt_call_args rbracket
                     {
                         $$ = NEW_CALL($1, tAREF, $3, &@$);
+                        $$ = pm_yindex_call(p, $$, &@2, &@4);
                         fixpos($$, $1);
                     }
                 ;
@@ -10196,6 +10200,19 @@ pm_ybegin_keywords(struct parser_params *p, NODE *node, const YYLTYPE *begin_loc
     return node;
 }
 
+/* An index call: a[i] and its write form. The brackets are the message. */
+static NODE *
+pm_yindex_call(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing)
+{
+    if (node != NULL && PM_NODE_TYPE_P(node, PM_CALL_NODE)) {
+        pm_call_node_t *call = (pm_call_node_t *) node;
+        call->opening_loc = pm_yloc(opening);
+        call->closing_loc = pm_yloc(closing);
+        call->message_loc = (pm_location_t) { opening->beg, closing->end - opening->beg };
+    }
+    return node;
+}
+
 /* Set the message location on a call once the operator/message token is at
  * hand; the constructors do not receive it. */
 static NODE *
@@ -10587,15 +10604,27 @@ rb_node_colon3_new(struct parser_params *p, ID nd_mid, const YYLTYPE *loc, const
 static rb_node_dot2_t *
 rb_node_dot2_new(struct parser_params *p, NODE *nd_beg, NODE *nd_end, const YYLTYPE *loc, const YYLTYPE *operator_loc)
 {
-    YSTUB("rb_node_dot2_new");
-    return NULL;
+    pm_node_flags_t flags = 0;
+    if ((nd_beg == NULL || PM_NODE_FLAG_P(nd_beg, PM_NODE_FLAG_STATIC_LITERAL)) &&
+        (nd_end == NULL || PM_NODE_FLAG_P(nd_end, PM_NODE_FLAG_STATIC_LITERAL))) {
+        flags |= PM_NODE_FLAG_STATIC_LITERAL;
+    }
+    return (rb_node_dot2_t *) pm_range_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+        nd_beg, nd_end, pm_yloc(operator_loc));
 }
 
 static rb_node_dot3_t *
 rb_node_dot3_new(struct parser_params *p, NODE *nd_beg, NODE *nd_end, const YYLTYPE *loc, const YYLTYPE *operator_loc)
 {
-    YSTUB("rb_node_dot3_new");
-    return NULL;
+    pm_node_flags_t flags = PM_RANGE_FLAGS_EXCLUDE_END;
+    if ((nd_beg == NULL || PM_NODE_FLAG_P(nd_beg, PM_NODE_FLAG_STATIC_LITERAL)) &&
+        (nd_end == NULL || PM_NODE_FLAG_P(nd_end, PM_NODE_FLAG_STATIC_LITERAL))) {
+        flags |= PM_NODE_FLAG_STATIC_LITERAL;
+    }
+    return (rb_node_dot3_t *) pm_range_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+        nd_beg, nd_end, pm_yloc(operator_loc));
 }
 
 static rb_node_self_t *
@@ -11142,10 +11171,21 @@ rb_node_postexe_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc, 
 static rb_node_attrasgn_t *
 rb_node_attrasgn_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd_args, const YYLTYPE *loc)
 {
-    if (!pm_yid_is_notop(nd_mid)) {
-        /* x[i] = v arrives with the aryset port. */
+    if (!pm_yid_is_notop(nd_mid) && nd_mid != tASET) {
         YSTUB("rb_node_attrasgn_new");
         return NULL;
+    }
+
+    if (nd_mid == tASET) {
+        /* a[i] = v: the []= call, its brackets decorated by the aryset
+         * action, the value appended by node_assign. */
+        pm_node_flags_t flags = PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE;
+        if (nd_recv != NULL && PM_NODE_TYPE_P(nd_recv, PM_SELF_NODE)) flags |= PM_CALL_NODE_FLAGS_IGNORE_VISIBILITY;
+        return (rb_node_attrasgn_t *) pm_call_node_new(
+            p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+            nd_recv, (pm_location_t) { 0 }, YID2CONST(nd_mid), (pm_location_t) { 0 },
+            (pm_location_t) { 0 }, pm_yargs_from_list(p, nd_args),
+            (pm_location_t) { 0 }, (pm_location_t) { 0 }, NULL);
     }
 
     pm_node_flags_t flags = PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE;
@@ -11961,8 +12001,8 @@ aryset_check(struct parser_params *p, NODE *args)
 static NODE *
 aryset(struct parser_params *p, NODE *recv, NODE *idx, const YYLTYPE *loc)
 {
-    YSTUB("aryset");
-    return NULL;
+    aryset_check(p, idx);
+    return NEW_ATTRASGN(recv, tASET, idx, loc);
 }
 
 static void
@@ -12083,10 +12123,18 @@ node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ct
         if (PM_NODE_FLAG_P(lhs, PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE)) {
             pm_call_node_t *call = (pm_call_node_t *) lhs;
             if (rhs != NULL) {
-                pm_node_list_t arguments = { 0 };
-                pm_node_list_append(p->pm->arena, &arguments, rhs);
-                call->arguments = pm_arguments_node_new(
-                    p->pm->arena, ++p->pm->node_id, 0, rhs->location, arguments);
+                if (call->arguments != NULL) {
+                    /* index writes: the value joins the indices */
+                    pm_node_list_append(p->pm->arena, &call->arguments->arguments, rhs);
+                    uint32_t end = rhs->location.start + rhs->location.length;
+                    call->arguments->base.location.length = end - call->arguments->base.location.start;
+                }
+                else {
+                    pm_node_list_t arguments = { 0 };
+                    pm_node_list_append(p->pm->arena, &arguments, rhs);
+                    call->arguments = pm_arguments_node_new(
+                        p->pm->arena, ++p->pm->node_id, 0, rhs->location, arguments);
+                }
                 call->equal_loc = operator_loc;
             }
             lhs->location = pm_yloc(loc);
@@ -12204,7 +12252,8 @@ method_cond(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 static NODE*
 new_nil_at(struct parser_params *p, const rb_code_position_t *pos)
 {
-    YSTUB("new_nil_at");
+    /* prism's open-ended ranges have no node on the open side. */
+    (void) pos;
     return NULL;
 }
 
@@ -12432,10 +12481,51 @@ new_unique_key_hash(struct parser_params *p, NODE *hash, const YYLTYPE *loc)
 }
 
 static NODE *
-new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_context ctxt, const YYLTYPE *loc)
+new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_context ctxt, const YYLTYPE *op_loc, const YYLTYPE *loc)
 {
-    YSTUB("new_op_assign");
-    return NULL;
+    (void) ctxt;
+    if (lhs == NULL) return NULL;
+
+    pm_location_t location = pm_yloc(loc);
+    pm_location_t operator = pm_yloc(op_loc);
+    bool is_or = (op == idOROP);
+    bool is_and = (op == idANDOP);
+    pm_constant_id_t binop = (is_or || is_and) ? 0 : YID2CONST(op);
+
+#define YOPW(prefix, name_expr, name_loc_expr, depth_args) \
+    (is_or ? (NODE *) prefix##_or_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, name_expr, name_loc_expr, operator, rhs depth_args) : \
+     is_and ? (NODE *) prefix##_and_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, name_expr, name_loc_expr, operator, rhs depth_args) : \
+     (NODE *) prefix##_operator_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, name_expr, name_loc_expr, operator, rhs, binop depth_args))
+
+    switch (PM_NODE_TYPE(lhs)) {
+      case PM_LOCAL_VARIABLE_WRITE_NODE: {
+        pm_local_variable_write_node_t *write = (pm_local_variable_write_node_t *) lhs;
+        /* locals order name_loc/operator/value differently and carry depth */
+        if (is_or) return (NODE *) pm_local_variable_or_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, write->name_loc, operator, rhs, write->name, write->depth);
+        if (is_and) return (NODE *) pm_local_variable_and_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, write->name_loc, operator, rhs, write->name, write->depth);
+        return (NODE *) pm_local_variable_operator_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, write->name_loc, operator, rhs, write->name, binop, write->depth);
+      }
+      case PM_INSTANCE_VARIABLE_WRITE_NODE: {
+        pm_instance_variable_write_node_t *write = (pm_instance_variable_write_node_t *) lhs;
+        return YOPW(pm_instance_variable, write->name, write->name_loc, );
+      }
+      case PM_GLOBAL_VARIABLE_WRITE_NODE: {
+        pm_global_variable_write_node_t *write = (pm_global_variable_write_node_t *) lhs;
+        return YOPW(pm_global_variable, write->name, write->name_loc, );
+      }
+      case PM_CLASS_VARIABLE_WRITE_NODE: {
+        pm_class_variable_write_node_t *write = (pm_class_variable_write_node_t *) lhs;
+        return YOPW(pm_class_variable, write->name, write->name_loc, );
+      }
+      case PM_CONSTANT_WRITE_NODE: {
+        pm_constant_write_node_t *write = (pm_constant_write_node_t *) lhs;
+        return YOPW(pm_constant, write->name, write->name_loc, );
+      }
+      default:
+        YSTUB("new_op_assign");
+        return lhs;
+    }
+#undef YOPW
 }
 
 static NODE *
@@ -12443,8 +12533,26 @@ new_ary_op_assign(struct parser_params *p, NODE *ary,
                   NODE *args, ID op, NODE *rhs, const YYLTYPE *args_loc, const YYLTYPE *loc,
                   const YYLTYPE *call_operator_loc, const YYLTYPE *opening_loc, const YYLTYPE *closing_loc, const YYLTYPE *binary_operator_loc)
 {
-    YSTUB("new_ary_op_assign");
-    return NULL;
+    pm_location_t location = pm_yloc(loc);
+    pm_location_t operator = pm_yloc(binary_operator_loc);
+    pm_arguments_node_t *arguments = pm_yargs_from_list(p, args);
+    (void) args_loc;
+    (void) call_operator_loc;
+
+    if (op == idOROP) {
+        return (NODE *) pm_index_or_write_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, location, ary, (pm_location_t) { 0 },
+            pm_yloc(opening_loc), arguments, pm_yloc(closing_loc), NULL, operator, rhs);
+    }
+    if (op == idANDOP) {
+        return (NODE *) pm_index_and_write_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, location, ary, (pm_location_t) { 0 },
+            pm_yloc(opening_loc), arguments, pm_yloc(closing_loc), NULL, operator, rhs);
+    }
+    return (NODE *) pm_index_operator_write_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, location, ary, (pm_location_t) { 0 },
+        pm_yloc(opening_loc), arguments, pm_yloc(closing_loc), NULL,
+        YID2CONST(op), operator, rhs);
 }
 
 static NODE *
@@ -12452,15 +12560,66 @@ new_attr_op_assign(struct parser_params *p, NODE *lhs,
                    ID atype, ID attr, ID op, NODE *rhs, const YYLTYPE *loc,
                    const YYLTYPE *call_operator_loc, const YYLTYPE *message_loc, const YYLTYPE *binary_operator_loc)
 {
-    YSTUB("new_attr_op_assign");
-    return NULL;
+    pm_location_t location = pm_yloc(loc);
+    pm_location_t operator = pm_yloc(binary_operator_loc);
+    pm_location_t call_operator = pm_yloc(call_operator_loc);
+    pm_location_t message = pm_yloc(message_loc);
+    pm_constant_id_t read_name = YID2CONST(attr);
+    pm_constant_id_t write_name = YID2CONST(pm_yid_attrset(&p->pm->metadata_arena, &p->pm->constant_pool, attr));
+    pm_node_flags_t flags = CALL_Q_P(atype) ? PM_CALL_NODE_FLAGS_SAFE_NAVIGATION : 0;
+
+    if (op == idOROP) {
+        return (NODE *) pm_call_or_write_node_new(
+            p->pm->arena, ++p->pm->node_id, flags, location, lhs, call_operator, message,
+            read_name, write_name, operator, rhs);
+    }
+    if (op == idANDOP) {
+        return (NODE *) pm_call_and_write_node_new(
+            p->pm->arena, ++p->pm->node_id, flags, location, lhs, call_operator, message,
+            read_name, write_name, operator, rhs);
+    }
+    return (NODE *) pm_call_operator_write_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, location, lhs, call_operator, message,
+        read_name, write_name, YID2CONST(op), operator, rhs);
 }
 
 static NODE *
 new_const_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_context ctxt, const YYLTYPE *loc)
 {
-    YSTUB("new_const_op_assign");
-    return NULL;
+    (void) ctxt;
+    pm_location_t location = pm_yloc(loc);
+
+    if (lhs == NULL || !PM_NODE_TYPE_P(lhs, PM_CONSTANT_PATH_NODE)) {
+        YSTUB("new_const_op_assign");
+        return lhs;
+    }
+
+    /* the operator sits between the path and the value */
+    pm_location_t operator = { 0 };
+    {
+        uint32_t scan = lhs->location.start + lhs->location.length;
+        const uint8_t *source = p->pm->start;
+        while (rhs != NULL && scan < rhs->location.start) {
+            uint8_t c = source[scan];
+            if (c == '#') { while (scan < rhs->location.start && source[scan] != '\n') scan++; }
+            else if (c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\\') scan++;
+            else break;
+        }
+        if (rhs != NULL && scan < rhs->location.start) {
+            uint32_t end = scan;
+            while (end < rhs->location.start && source[end] != ' ' && source[end] != '\t' && source[end] != '\n') end++;
+            operator = (pm_location_t) { scan, end - scan };
+        }
+    }
+
+    pm_constant_path_node_t *target = (pm_constant_path_node_t *) lhs;
+    if (op == idOROP) {
+        return (NODE *) pm_constant_path_or_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, target, operator, rhs);
+    }
+    if (op == idANDOP) {
+        return (NODE *) pm_constant_path_and_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, target, operator, rhs);
+    }
+    return (NODE *) pm_constant_path_operator_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, target, operator, rhs, YID2CONST(op));
 }
 
 static NODE *
