@@ -1482,6 +1482,7 @@ static NODE *pm_yrescue_modifier(struct parser_params *p, NODE *expr, NODE *fall
 static NODE *pm_yblock_params(struct parser_params *p, NODE *params, NODE *block_locals, const YYLTYPE *opening, const YYLTYPE *closing);
 static NODE *pm_yblock_local(struct parser_params *p, ID name, const YYLTYPE *loc);
 static NODE *pm_yparam_group(struct parser_params *p, NODE *node);
+static void pm_yforward_params(struct parser_params *p, NODE *node, const YYLTYPE *loc);
 static NODE *pm_yistr(struct parser_params *p, NODE *part);
 static NODE *pm_yindex_call(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
@@ -3635,6 +3636,7 @@ paren_args	: '(' opt_call_args rparen
                         }
                         else {
                             $$ = new_args_forward_call(p, $2, &@4, &@$);
+                            pm_yparens_set(p, &@1, &@5);
                         }
                     }
                 | '(' args_forward rparen
@@ -3644,6 +3646,7 @@ paren_args	: '(' opt_call_args rparen
                         }
                         else {
                             $$ = new_args_forward_call(p, 0, &@2, &@$);
+                            pm_yparens_set(p, &@1, &@3);
                         }
                     }
                 ;
@@ -5466,7 +5469,7 @@ args_tail	: args_tail_basic(arg_value, opt_comma)
                     {
                         add_forwarding_args(p);
                         $$ = new_args_tail(p, 0, $args_forward, arg_FWD_BLOCK, &@args_forward);
-                        YSTUB("grammar"); /* PORTME: $$->nd_ainfo.forwarding = 1; */
+                        pm_yforward_params(p, (NODE *) $$, &@args_forward);
                     }
                 ;
 
@@ -5475,7 +5478,6 @@ largs_tail	: args_tail_basic(arg_value, none)
                     {
                         yyerror1(&@args_forward, "unexpected ... in lambda argument");
                         $$ = new_args_tail(p, 0, 0, 0, &@args_forward);
-                        YSTUB("grammar"); /* PORTME: $$->nd_ainfo.forwarding = 1; */
                     }
                 ;
 
@@ -10002,6 +10004,9 @@ pm_yargs_from_list(struct parser_params *p, NODE *list)
           case PM_SPLAT_NODE:
             splats++;
             break;
+          case PM_FORWARDING_ARGUMENTS_NODE:
+            flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_FORWARDING;
+            break;
           case PM_KEYWORD_HASH_NODE: {
             flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORDS;
             pm_node_list_t pairs = ((pm_keyword_hash_node_t *) argument)->elements;
@@ -10389,6 +10394,16 @@ pm_yclass_body(struct parser_params *p, NODE *body, const YYLTYPE *loc, const YY
         return body;
     }
     return (pm_node_t *) pm_ystatements_opt(p, body);
+}
+
+/* A ... in a parameter list is a ForwardingParameterNode in the keyword
+ * rest slot of the tail the grammar just built. */
+static void
+pm_yforward_params(struct parser_params *p, NODE *node, const YYLTYPE *loc)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_PARAMETERS_NODE)) return;
+    ((pm_parameters_node_t *) node)->keyword_rest = (pm_node_t *) pm_forwarding_parameter_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc));
 }
 
 /* One block-local declaration, the x of |a; x|. */
@@ -14183,15 +14198,18 @@ local_id(struct parser_params *p, ID id)
 static int
 check_forwarding_args(struct parser_params *p)
 {
-    YSTUB("check_forwarding_args");
-    return 0;
+    if (local_id(p, idFWD_ALL)) return TRUE;
+    compile_error(p, "unexpected ...");
+    return FALSE;
 }
 
 static void
 add_forwarding_args(struct parser_params *p)
 {
-    YSTUB("add_forwarding_args");
-    return;
+    arg_var(p, idFWD_REST);
+    arg_var(p, idFWD_KWREST);
+    arg_var(p, idFWD_BLOCK);
+    arg_var(p, idFWD_ALL);
 }
 
 static void
@@ -14230,8 +14248,11 @@ forwarding_arg_check(struct parser_params *p, ID arg, ID all, const char *var)
 static NODE *
 new_args_forward_call(struct parser_params *p, NODE *leading, const YYLTYPE *loc, const YYLTYPE *argsloc)
 {
-    YSTUB("new_args_forward_call");
-    return NULL;
+    NODE *dots = (NODE *) pm_forwarding_arguments_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc));
+    (void) argsloc;
+    if (leading != NULL) return list_append(p, leading, dots);
+    return NEW_LIST(dots, loc);
 }
 
 static NODE *
