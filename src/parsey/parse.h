@@ -190,7 +190,7 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 2143 "parse.y"
+#line 2146 "parse.y"
 
     NODE *node;
     rb_node_fcall_t *node_fcall;
