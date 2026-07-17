@@ -1400,6 +1400,10 @@ static NODE *pm_ydef_finish(struct parser_params *p, NODE *node, NODE *args, NOD
 static NODE *pm_yassoc(struct parser_params *p, NODE *key, NODE *value, const YYLTYPE *operator_loc, const YYLTYPE *loc);
 static NODE *pm_ylabel_symbol(struct parser_params *p, ID label, const YYLTYPE *loc);
 static NODE *pm_yhash_braces(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
+static NODE *pm_ytarget(struct parser_params *p, NODE *node);
+static NODE *pm_yensure(struct parser_params *p, NODE *body, const YYLTYPE *ensure_loc, const YYLTYPE *loc);
+static NODE *pm_yrescue_finish(struct parser_params *p, NODE *node, const YYLTYPE *keyword_loc, const YYLTYPE *then_loc);
+static NODE *pm_yrescue_modifier(struct parser_params *p, NODE *expr, NODE *fallback, const YYLTYPE *keyword_loc, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
 static rb_node_xstr_t *rb_node_xstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -1831,10 +1835,8 @@ static NODE *
 rescued_expr(struct parser_params *p, NODE *arg, NODE *rescue,
              const YYLTYPE *arg_loc, const YYLTYPE *mod_loc, const YYLTYPE *res_loc)
 {
-    YYLTYPE loc = code_loc_gen(mod_loc, res_loc);
-    rescue = NEW_RESBODY(0, 0, remove_begin(rescue), 0, &loc);
-    loc.beg = arg_loc->beg;
-    return NEW_RESCUE(arg, rescue, 0, &loc);
+    YYLTYPE loc = { arg_loc->beg, res_loc->end };
+    return pm_yrescue_modifier(p, arg, remove_begin(rescue), mod_loc, &loc);
 }
 
 static NODE *add_block_exit(struct parser_params *p, NODE *node);
@@ -2679,7 +2681,9 @@ bodystmt	: compstmt(stmts)[body]
                     }
                   opt_ensure
                     {
-                        $$ = new_bodystmt(p, $body, $opt_rescue, $elsebody, $opt_ensure, &@$);
+                        YYLTYPE else_loc = { @k_else.beg, @elsebody.end };
+                        NODE *else_clause = pm_yelse(p, $elsebody, &@k_else, &else_loc);
+                        $$ = new_bodystmt(p, $body, $opt_rescue, else_clause, $opt_ensure, &@$);
                     }
                 | compstmt(stmts)[body]
                   lex_ctxt[ctxt]
@@ -2791,10 +2795,7 @@ stmt		: keyword_alias[kw] fitem[new] {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fit
                 | stmt[body] modifier_rescue[mod] after_rescue[ctxt] stmt[resbody]
                     {
                         p->ctxt.in_rescue = $ctxt.in_rescue;
-                        NODE *resq;
-                        YYLTYPE loc = code_loc_gen(&@mod, &@resbody);
-                        resq = NEW_RESBODY(0, 0, remove_begin($resbody), 0, &loc);
-                        $$ = NEW_RESCUE(remove_begin($body), resq, 0, &@$);
+                        $$ = pm_yrescue_modifier(p, remove_begin($body), remove_begin($resbody), &@mod, &@$);
                     }
                 | k_END[k_end] block_open[lbrace] compstmt(stmts)[body] '}'[rbrace]
                     {
@@ -2817,10 +2818,8 @@ stmt		: keyword_alias[kw] fitem[new] {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fit
                   after_rescue[after_rescue] stmt[resbody]
                     {
                         p->ctxt.in_rescue = $after_rescue.in_rescue;
-                        YYLTYPE loc = code_loc_gen(&@modifier_rescue, &@resbody);
-                        $resbody = NEW_RESBODY(0, 0, remove_begin($resbody), 0, &loc);
-                        loc.beg = @mrhs_arg.beg;
-                        $mrhs_arg = NEW_RESCUE($mrhs_arg, $resbody, 0, &loc);
+                        YYLTYPE loc = { @mrhs_arg.beg, @resbody.end };
+                        $mrhs_arg = pm_yrescue_modifier(p, $mrhs_arg, remove_begin($resbody), &@modifier_rescue, &loc);
                         $$ = node_assign(p, (NODE *)$lhs, $mrhs_arg, $lex_ctxt, &@$);
                     }
                 | mlhs[lhs] '=' lex_ctxt[ctxt] mrhs_arg[rhs]
@@ -4924,21 +4923,8 @@ opt_rescue	: k_rescue exc_list exc_var then
                   compstmt(stmts)
                   opt_rescue
                     {
-                        NODE *err = $3;
-                        if ($3) {
-                            err = NEW_ERRINFO(&@3);
-                            err = node_assign(p, $3, err, NO_LEX_CTXT, &@3);
-                        }
-                        $$ = NEW_RESBODY($2, $3, $5, $6, &@$);
-                        if ($2) {
-                            fixpos($$, $2);
-                        }
-                        else if ($3) {
-                            fixpos($$, $3);
-                        }
-                        else {
-                            fixpos($$, $5);
-                        }
+                        $$ = NEW_RESBODY($2, pm_ytarget(p, $3), $5, $6, &@$);
+                        $$ = pm_yrescue_finish(p, $$, &@1, &@4);
                     }
                 | none
                 ;
@@ -4964,8 +4950,8 @@ exc_var		: tASSOC lhs
 opt_ensure	: k_ensure stmts terms?
                     {
                         p->ctxt.in_rescue = $1.in_rescue;
-                        $$ = $2;
-                        void_expr(p, void_stmts(p, $$));
+                        void_expr(p, void_stmts(p, $2));
+                        $$ = pm_yensure(p, $2, &@1, &@$);
                     }
                 | none
                 ;
@@ -9794,6 +9780,132 @@ pm_ylocals(struct parser_params *p)
     return locals;
 }
 
+/* A write node built by assignable() re-expressed as prism's target node,
+ * for the positions that bind without assigning (rescue => e, for x in ...). */
+static NODE *
+pm_ytarget(struct parser_params *p, NODE *node)
+{
+    if (node == NULL) return NULL;
+
+    pm_location_t loc = node->location;
+    switch (PM_NODE_TYPE(node)) {
+      case PM_LOCAL_VARIABLE_WRITE_NODE: {
+        pm_local_variable_write_node_t *write = (pm_local_variable_write_node_t *) node;
+        return (NODE *) pm_local_variable_target_node_new(p->pm->arena, ++p->pm->node_id, 0, loc, write->name, write->depth);
+      }
+      case PM_INSTANCE_VARIABLE_WRITE_NODE:
+        return (NODE *) pm_instance_variable_target_node_new(p->pm->arena, ++p->pm->node_id, 0, loc, ((pm_instance_variable_write_node_t *) node)->name);
+      case PM_GLOBAL_VARIABLE_WRITE_NODE:
+        return (NODE *) pm_global_variable_target_node_new(p->pm->arena, ++p->pm->node_id, 0, loc, ((pm_global_variable_write_node_t *) node)->name);
+      case PM_CLASS_VARIABLE_WRITE_NODE:
+        return (NODE *) pm_class_variable_target_node_new(p->pm->arena, ++p->pm->node_id, 0, loc, ((pm_class_variable_write_node_t *) node)->name);
+      case PM_CONSTANT_WRITE_NODE:
+        return (NODE *) pm_constant_target_node_new(p->pm->arena, ++p->pm->node_id, 0, loc, ((pm_constant_write_node_t *) node)->name);
+      default:
+        YSTUB("pm_ytarget");
+        return node;
+    }
+}
+
+/* An ensure clause; the end keyword arrives when the enclosing block closes. */
+static NODE *
+pm_yensure(struct parser_params *p, NODE *body, const YYLTYPE *ensure_loc, const YYLTYPE *loc)
+{
+    return (NODE *) pm_ensure_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(ensure_loc), pm_ystatements_opt(p, body), (pm_location_t) { 0 });
+}
+
+/* Complete a rescue clause with the locations only its reduction has: the
+ * keyword, a then keyword if one was written, and the => scanned between
+ * the clause head and the reference. */
+static NODE *
+pm_yrescue_finish(struct parser_params *p, NODE *node, const YYLTYPE *keyword_loc, const YYLTYPE *then_loc)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_RESCUE_NODE)) {
+        YSTUB("pm_yrescue_finish");
+        return node;
+    }
+
+    pm_rescue_node_t *rescue = (pm_rescue_node_t *) node;
+    rescue->keyword_loc = pm_yloc(keyword_loc);
+
+    if (rescue->reference != NULL) {
+        uint32_t from = rescue->exceptions.size > 0
+            ? rescue->exceptions.nodes[rescue->exceptions.size - 1]->location.start + rescue->exceptions.nodes[rescue->exceptions.size - 1]->location.length
+            : rescue->keyword_loc.start + rescue->keyword_loc.length;
+        const uint8_t *source = p->pm->start;
+        uint32_t scan = from;
+        while (scan + 1 < rescue->reference->location.start) {
+            if (source[scan] == '=' && source[scan + 1] == '>') {
+                rescue->operator_loc = (pm_location_t) { scan, 2 };
+                break;
+            }
+            if (source[scan] == '#') { while (scan < rescue->reference->location.start && source[scan] != '\n') scan++; }
+            else scan++;
+        }
+    }
+
+    /* `then` was written iff the token really spells it. */
+    if (then_loc->end - then_loc->beg == 4 && memcmp(p->pm->start + then_loc->beg, "then", 4) == 0) {
+        rescue->then_keyword_loc = pm_yloc(then_loc);
+    }
+
+    /* The span runs to the last clause's own body, not to the term that
+     * closed the reduction. */
+    uint32_t end = rescue->keyword_loc.start + rescue->keyword_loc.length;
+    if (rescue->subsequent != NULL) {
+        end = rescue->subsequent->base.location.start + rescue->subsequent->base.location.length;
+    }
+    else if (rescue->statements != NULL) {
+        end = rescue->statements->base.location.start + rescue->statements->base.location.length;
+    }
+    else if (rescue->reference != NULL) {
+        end = rescue->reference->location.start + rescue->reference->location.length;
+    }
+    else if (rescue->exceptions.size > 0) {
+        pm_node_t *last = rescue->exceptions.nodes[rescue->exceptions.size - 1];
+        end = last->location.start + last->location.length;
+    }
+    rescue->base.location = (pm_location_t) { rescue->keyword_loc.start, end - rescue->keyword_loc.start };
+
+    return node;
+}
+
+/* Stamp the closing `end` through a begin block: the block itself, and the
+ * else/ensure clauses whose spans wait for it. */
+static void
+pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_BEGIN_NODE)) return;
+    pm_begin_node_t *begin = (pm_begin_node_t *) node;
+    begin->end_keyword_loc = end_keyword;
+
+    pm_location_t next_keyword = end_keyword;
+    if (begin->ensure_clause != NULL) {
+        pm_ensure_node_t *ensure = begin->ensure_clause;
+        ensure->end_keyword_loc = end_keyword;
+        uint32_t end = end_keyword.start + end_keyword.length;
+        ensure->base.location.length = end - ensure->base.location.start;
+        next_keyword = ensure->ensure_keyword_loc;
+    }
+    if (begin->else_clause != NULL) {
+        pm_else_node_t *else_clause = begin->else_clause;
+        else_clause->end_keyword_loc = next_keyword;
+        uint32_t end = next_keyword.start + next_keyword.length;
+        else_clause->base.location.length = end - else_clause->base.location.start;
+    }
+}
+
+/* A modifier rescue: expr rescue fallback. */
+static NODE *
+pm_yrescue_modifier(struct parser_params *p, NODE *expr, NODE *fallback, const YYLTYPE *keyword_loc, const YYLTYPE *loc)
+{
+    return (NODE *) pm_rescue_modifier_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        expr, pm_yloc(keyword_loc), fallback);
+}
+
 /* A hash pair. String keys freeze (hash keys are deduplicated), and the pair
  * is a static literal when both halves are. */
 static NODE *
@@ -9899,7 +10011,14 @@ pm_ydef_finish(struct parser_params *p, NODE *node, NODE *args, NODE *body, cons
     pm_def_node_t *def = (pm_def_node_t *) node;
     def->base.location = pm_yloc(loc);
     def->end_keyword_loc = pm_yloc(end_loc);
-    def->body = (pm_node_t *) pm_ystatements_opt(p, body);
+    if (body != NULL && PM_NODE_TYPE_P(body, PM_BEGIN_NODE)) {
+        pm_ybegin_stamp_end(body, def->end_keyword_loc);
+        body->location = def->base.location;
+        def->body = body;
+    }
+    else {
+        def->body = (pm_node_t *) pm_ystatements_opt(p, body);
+    }
     def->locals = pm_ylocals(p);
 
     if (args != NULL) {
@@ -9981,7 +10100,7 @@ pm_ybegin_keywords(struct parser_params *p, NODE *node, const YYLTYPE *begin_loc
     if (node != NULL && PM_NODE_TYPE_P(node, PM_BEGIN_NODE)) {
         pm_begin_node_t *begin = (pm_begin_node_t *) node;
         begin->begin_keyword_loc = pm_yloc(begin_loc);
-        begin->end_keyword_loc = pm_yloc(end_loc);
+        pm_ybegin_stamp_end(node, pm_yloc(end_loc));
     }
     return node;
 }
@@ -10104,6 +10223,13 @@ rb_node_retry_new(struct parser_params *p, const YYLTYPE *loc)
 static rb_node_begin_t *
 rb_node_begin_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 {
+    /* A bodystmt with rescue/else/ensure already built the BeginNode; the
+     * keywords are stamped by the enclosing begin/end reduction. */
+    if (nd_body != NULL && PM_NODE_TYPE_P(nd_body, PM_BEGIN_NODE)) {
+        nd_body->location = pm_yloc(loc);
+        return (rb_node_begin_t *) nd_body;
+    }
+
     return (rb_node_begin_t *) pm_begin_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
         (pm_location_t) { 0 }, pm_ystatements_opt(p, nd_body),
@@ -10120,8 +10246,23 @@ rb_node_rescue_new(struct parser_params *p, NODE *nd_head, NODE *nd_resq, NODE *
 static rb_node_resbody_t *
 rb_node_resbody_new(struct parser_params *p, NODE *nd_args, NODE *nd_exc_var, NODE *nd_body, NODE *nd_next, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_resbody_new");
-    return NULL;
+    pm_node_list_t exceptions = { 0 };
+    if (nd_args != NULL) {
+        if (PM_NODE_TYPE_P(nd_args, PM_ARRAY_NODE)) {
+            exceptions = ((pm_array_node_t *) nd_args)->elements;
+        }
+        else {
+            YSTUB("rb_node_resbody_new");
+        }
+    }
+
+    if (nd_next != NULL && !PM_NODE_TYPE_P(nd_next, PM_RESCUE_NODE)) nd_next = NULL;
+
+    return (rb_node_resbody_t *) pm_rescue_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        (pm_location_t) { 0 }, exceptions, (pm_location_t) { 0 },
+        nd_exc_var, (pm_location_t) { 0 },
+        pm_ystatements_opt(p, nd_body), (pm_rescue_node_t *) nd_next);
 }
 
 static rb_node_ensure_t *
@@ -12153,8 +12294,27 @@ static NODE *
 new_bodystmt(struct parser_params *p, NODE *head, NODE *rescue, NODE *rescue_else, NODE *ensure, const YYLTYPE *loc)
 {
     if (rescue == NULL && rescue_else == NULL && ensure == NULL) return head;
-    YSTUB("new_bodystmt"); /* PORTME: rescue/else/ensure clauses */
-    return head;
+
+    pm_ensure_node_t *ensure_clause = (ensure != NULL && PM_NODE_TYPE_P(ensure, PM_ENSURE_NODE)) ? (pm_ensure_node_t *) ensure : NULL;
+    pm_else_node_t *else_clause = (rescue_else != NULL && PM_NODE_TYPE_P(rescue_else, PM_ELSE_NODE)) ? (pm_else_node_t *) rescue_else : NULL;
+    pm_rescue_node_t *rescue_clause = (rescue != NULL && PM_NODE_TYPE_P(rescue, PM_RESCUE_NODE)) ? (pm_rescue_node_t *) rescue : NULL;
+
+    if ((rescue != NULL && rescue_clause == NULL) || (rescue_else != NULL && else_clause == NULL) || (ensure != NULL && ensure_clause == NULL)) {
+        YSTUB("new_bodystmt");
+    }
+
+    /* An else clause's span runs to the next keyword, known here if it is
+     * ensure and stamped later if it is the closing end. */
+    if (else_clause != NULL && ensure_clause != NULL) {
+        pm_location_t next_keyword = ensure_clause->ensure_keyword_loc;
+        else_clause->end_keyword_loc = next_keyword;
+        else_clause->base.location.length = (next_keyword.start + next_keyword.length) - else_clause->base.location.start;
+    }
+
+    return (NODE *) pm_begin_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        (pm_location_t) { 0 }, pm_ystatements_opt(p, head),
+        rescue_clause, else_clause, ensure_clause, (pm_location_t) { 0 });
 }
 
 static void
