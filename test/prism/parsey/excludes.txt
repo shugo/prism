@@ -1,21 +1,23 @@
+# Fixtures the parse.y backend does not yet reproduce byte-identically.
+# This list is a ratchet: when an entry starts passing, the equivalence test
+# fails until it is removed here.
+#
+# Some entries are intentional: they cover semantics the hand-written parser
+# introduced on top of the grammar (fine-grained string frozen/mutable flags,
+# duplicate pattern-variable detection, some invalid-code checks) and are
+# kept excluded rather than ported.
 3.3-3.3/block_args_in_array_assignment.txt
 3.3-3.3/keyword_args_in_array_assignment.txt
-3.3-4.0/end_block_exit.txt
 3.3-4.0/void_value.txt
 4.1/noblock.txt
 4.1/trailing_comma_after_method_arguments.txt
-alias.txt
 begin_ensure.txt
-break.txt
 case_in_hash_key.txt
 character_literal.txt
 constants.txt
 dash_heredocs.txt
 defined.txt
-dos_endings.txt
-dstring.txt
 encoding_binary.txt
-encoding_euc_jp.txt
 hashes.txt
 heredoc_percent_q_newline_delimiter.txt
 heredocs_leading_whitespace.txt
@@ -23,58 +25,40 @@ heredocs_nested.txt
 heredocs_with_fake_newlines.txt
 if.txt
 keywords.txt
-method_calls.txt
 methods.txt
 multi_write.txt
-next.txt
 nils.txt
 not.txt
 patterns.txt
-range_beginless.txt
-ranges.txt
 regex_escape_encoding.txt
 regex.txt
-regex_with_fake_newlines.txt
 repeat_parameters.txt
 rescue_modifier_statement_value.txt
 rescue.txt
-return.txt
 seattlerb/assoc__bare.txt
-seattlerb/block_return.txt
 seattlerb/bug169.txt
-seattlerb/bug_215.txt
 seattlerb/bug_not_parens.txt
 seattlerb/case_in.txt
 seattlerb/difficult0_.txt
 seattlerb/dstr_evstr.txt
 seattlerb/dstr_str.txt
 seattlerb/dsym_esc_to_sym.txt
-seattlerb/heredoc__backslash_dos_format.txt
-seattlerb/heredoc_backslash_nl.txt
+seattlerb/heredoc_bad_hex_escape.txt
+seattlerb/heredoc_bad_oct_escape.txt
 seattlerb/heredoc_nested.txt
 seattlerb/heredoc_squiggly_blank_line_plus_interpolation.txt
-seattlerb/masgn_double_paren.txt
-seattlerb/parse_line_call_ivar_line_break_paren.txt
-seattlerb/parse_line_dstr_soft_newline.txt
-seattlerb/parse_line_heredoc_evstr.txt
 seattlerb/pct_w_heredoc_interp_nested.txt
-seattlerb/pctW_lineno.txt
 seattlerb/regexp_escape_extended.txt
 seattlerb/regexp_unicode_curlies.txt
+seattlerb/str_lit_concat_bad_encodings.txt
 seattlerb/str_str_str.txt
 seattlerb/str_str.txt
-seattlerb/TestRubyParserShared.txt
 spanning_heredoc_newlines.txt
 spanning_heredoc.txt
-string_concatination_frozen_false.txt
-string_concatination_frozen_true.txt
 strings.txt
-symbols.txt
 tilde_heredocs.txt
-unparser/corpus/literal/block.txt
 unparser/corpus/literal/defined.txt
 unparser/corpus/literal/defs.txt
-unparser/corpus/literal/dstr.txt
 unparser/corpus/literal/literal.txt
 unparser/corpus/literal/pattern.txt
 unparser/corpus/literal/send.txt
@@ -83,7 +67,6 @@ whitequark/arg_duplicate_ignored.txt
 whitequark/dedenting_heredoc.txt
 whitequark/defs.txt
 whitequark/hash_pair_value_omission.txt
-whitequark/interp_digit_var.txt
 whitequark/keyword_argument_omission.txt
 whitequark/lbrace_arg_after_command_args.txt
 whitequark/masgn_attr.txt
@@ -91,12 +74,9 @@ whitequark/masgn_nested.txt
 whitequark/newline_in_hash_argument.txt
 whitequark/not.txt
 whitequark/parser_drops_truncated_parts_of_squiggly_heredoc.txt
-whitequark/parser_slash_slash_n_escaping_in_literals.txt
 whitequark/pattern_matching_expr_in_paren.txt
 whitequark/pin_expr.txt
-whitequark/return_block.txt
 whitequark/ruby_bug_14690.txt
 whitequark/ruby_bug_19281.txt
-whitequark/slash_newline_in_heredocs.txt
 whitequark/space_args_arg_block.txt
 whitequark/space_args_block.txt

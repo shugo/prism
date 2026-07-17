@@ -14,6 +14,7 @@ module Prism
   class ParseyEquivalenceTest < TestCase
     base = File.join(__dir__, "fixtures")
     excludes = File.readlines(File.join(__dir__, "parsey", "excludes.txt"), chomp: true)
+      .reject { |line| line.empty? || line.start_with?("#") }
 
     Dir[File.join(base, "**", "*.txt")].sort.each do |path|
       relative = path.delete_prefix("#{base}/")

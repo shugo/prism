@@ -1485,6 +1485,7 @@ static NODE *pm_yparam_group(struct parser_params *p, NODE *node);
 static void pm_yforward_params(struct parser_params *p, NODE *node, const YYLTYPE *loc);
 static NODE *pm_ypinned_var(struct parser_params *p, NODE *variable, const YYLTYPE *operator_loc, const YYLTYPE *loc);
 static NODE *pm_ypattern_delims(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
+static ID pm_ysym_value_id(struct parser_params *p, NODE *node);
 static NODE *pm_yistr(struct parser_params *p, NODE *part);
 static NODE *pm_yindex_call(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
@@ -1797,6 +1798,27 @@ method_add_block(struct parser_params *p, NODE *m, NODE *b, const YYLTYPE *loc)
             ((pm_forwarding_super_node_t *) m)->block = (pm_block_node_t *) b;
             m->location = pm_yloc(loc);
             return m;
+          case PM_RETURN_NODE:
+          case PM_BREAK_NODE:
+          case PM_NEXT_NODE: {
+            /* return foo arg do end: the block belongs to the call in the
+             * jump's arguments */
+            pm_arguments_node_t *arguments =
+                PM_NODE_TYPE_P(m, PM_RETURN_NODE) ? ((pm_return_node_t *) m)->arguments :
+                PM_NODE_TYPE_P(m, PM_BREAK_NODE) ? ((pm_break_node_t *) m)->arguments :
+                ((pm_next_node_t *) m)->arguments;
+            if (arguments != NULL && arguments->arguments.size == 1 &&
+                PM_NODE_TYPE_P(arguments->arguments.nodes[0], PM_CALL_NODE)) {
+                pm_call_node_t *call = (pm_call_node_t *) arguments->arguments.nodes[0];
+                call->block = b;
+                uint32_t end = b->location.start + b->location.length;
+                call->base.location.length = end - call->base.location.start;
+                arguments->base.location.length = end - arguments->base.location.start;
+                m->location = pm_yloc(loc);
+                return m;
+            }
+            break;
+          }
           default:
             break;
         }
@@ -2069,32 +2091,59 @@ PRINTF_ARGS(static void parser_compile_error(struct parser_params*, const rb_cod
 static NODE *
 add_block_exit(struct parser_params *p, NODE *node)
 {
+    if (!node) return 0;
+    switch (PM_NODE_TYPE(node)) {
+      case PM_BREAK_NODE: case PM_NEXT_NODE: case PM_REDO_NODE: break;
+      default:
+        return node;
+    }
+    if (!p->ctxt.in_defined && p->exits != NULL) {
+        pm_node_list_append(p->pm->arena, (pm_node_list_t *) p->exits, node);
+    }
     return node;
 }
 
 static rb_node_exits_t *
 init_block_exit(struct parser_params *p)
 {
-    /* block exit validation is not ported */
-    return NULL;
+    rb_node_exits_t *old = p->exits;
+    pm_node_list_t *exits = (pm_node_list_t *) pm_arena_zalloc(&p->pm->metadata_arena, sizeof(pm_node_list_t), PRISM_ALIGNOF(pm_node_list_t));
+    p->exits = (rb_node_exits_t *) exits;
+    return old;
 }
 
 static rb_node_exits_t *
 allow_block_exit(struct parser_params *p)
 {
-    return NULL;
+    rb_node_exits_t *exits = p->exits;
+    p->exits = 0;
+    return exits;
 }
 
 static void
 restore_block_exit(struct parser_params *p, rb_node_exits_t *exits)
 {
-    /* block exit validation is not ported */
+    p->exits = exits;
 }
 
 static void
 clear_block_exit(struct parser_params *p, bool error)
 {
-    /* block exit validation is not ported */
+    pm_node_list_t *exits = (pm_node_list_t *) p->exits;
+    if (!exits) return;
+    if (error) {
+        for (size_t i = 0; i < exits->size; i++) {
+            pm_node_t *e = exits->nodes[i];
+            YYLTYPE loc = { e->location.start, e->location.start + e->location.length };
+            switch (PM_NODE_TYPE(e)) {
+              case PM_BREAK_NODE: yyerror1(&loc, "Invalid break"); break;
+              case PM_NEXT_NODE: yyerror1(&loc, "Invalid next"); break;
+              case PM_REDO_NODE: yyerror1(&loc, "Invalid redo"); break;
+              default: break;
+            }
+        }
+    }
+    exits->size = 0;
 }
 
 #define WARN_EOL(tok) \
@@ -3206,6 +3255,7 @@ mlhs		: mlhs_basic
 mlhs_inner	: mlhs_basic
                 | tLPAREN mlhs_inner rparen
                     {
+                        pm_ymulti_parens(p, (NODE *) $2, &@1, &@3);
                         $$ = NEW_MASGN(NEW_LIST((NODE *)$2, &@$), 0, &@$);
                     }
                 ;
@@ -5010,9 +5060,9 @@ p_kw_label	: tLABEL
                 | tSTRING_BEG string_contents tLABEL_END
                     {
                         YYLTYPE loc = code_loc_gen(&@1, &@3);
-                        if (!$2 || nd_type_p($2, NODE_STR)) {
+                        if (!$2 || PM_NODE_TYPE_P($2, PM_STRING_NODE)) {
                             NODE *node = dsym_node(p, $2, &loc);
-                            $$ = rb_sym2id(rb_node_sym_string_val(node));
+                            $$ = pm_ysym_value_id(p, node);
                         }
                         else {
                             yyerror1(&loc, "symbol literal with interpolation is not allowed");
@@ -7217,6 +7267,12 @@ flush_string_content(struct parser_params *p, rb_encoding *enc, size_t back)
         }
         dispatch_delayed_token(p, tSTRING_CONTENT);
         p->lex.ptok = p->lex.pcur;
+        /* fork: the node the lexer just built carries the full span */
+        if (yylval.node != NULL && PM_NODE_TYPE_P(yylval.node, PM_STRING_NODE)) {
+            pm_location_t span = { p->yylloc->beg, p->yylloc->end - p->yylloc->beg };
+            yylval.node->location = span;
+            ((pm_string_node_t *) yylval.node)->content_loc = span;
+        }
     }
     dispatch_scan_event(p, tSTRING_CONTENT);
     p->lex.pcur += back;
@@ -9888,6 +9944,12 @@ string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *openin
                 string->opening_loc = opening_loc;
                 string->content_loc = heredoc_content;
                 string->closing_loc = heredoc_closing;
+                if (p->frozen_string_literal == 1) {
+                    node->flags |= PM_STRING_FLAGS_FROZEN | PM_NODE_FLAG_STATIC_LITERAL;
+                }
+                else if (p->frozen_string_literal == 0) {
+                    node->flags |= PM_STRING_FLAGS_MUTABLE;
+                }
                 return node;
             }
 
@@ -9930,6 +9992,12 @@ string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *openin
          * everything between the quotes. */
         string->content_loc = (pm_location_t) { opening->end, closing->beg - opening->end };
         string->base.location = pm_yloc(loc);
+        if (p->frozen_string_literal == 1) {
+            node->flags |= PM_STRING_FLAGS_FROZEN | PM_NODE_FLAG_STATIC_LITERAL;
+        }
+        else if (p->frozen_string_literal == 0) {
+            node->flags |= PM_STRING_FLAGS_MUTABLE;
+        }
     }
     else if (PM_NODE_TYPE_P(node, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(node, PM_EMBEDDED_VARIABLE_NODE)) {
         /* A string that is one interpolation and nothing else. */
@@ -10039,7 +10107,7 @@ pm_yargs_from_list(struct parser_params *p, NODE *list)
 
     pm_node_list_t arguments = { 0 };
     pm_location_t location;
-    if (PM_NODE_TYPE_P(list, PM_ARRAY_NODE)) {
+    if (PM_NODE_TYPE_P(list, PM_ARRAY_NODE) && ((pm_array_node_t *) list)->opening_loc.length == 0) {
         arguments = ((pm_array_node_t *) list)->elements;
         location = list->location;
     }
@@ -10100,13 +10168,22 @@ pm_yparens_set(struct parser_params *p, const YYLTYPE *opening, const YYLTYPE *c
     p->yparens.set = 1;
 }
 
+/* A closing delimiter's own byte: the rparen/rbracket nonterminals span a
+ * preceding empty opt_nl too, so the span can begin at the prior newline. */
+static pm_location_t
+pm_yclosing(const YYLTYPE *closing)
+{
+    if (closing->end == closing->beg) return (pm_location_t) { 0 };
+    return (pm_location_t) { closing->end - 1, 1 };
+}
+
 /* Attach the pending parentheses, if any, to the given call. */
 static void
 pm_yparens_take(struct parser_params *p, pm_call_node_t *call)
 {
     if (!p->yparens.set) return;
     call->opening_loc = pm_yloc(&p->yparens.opening);
-    call->closing_loc = pm_yloc(&p->yparens.closing);
+    call->closing_loc = pm_yclosing(&p->yparens.closing);
     p->yparens.set = 0;
 }
 
@@ -10422,6 +10499,7 @@ static NODE *
 pm_yistr_part(NODE *part)
 {
     if (part != NULL && PM_NODE_TYPE_P(part, PM_STRING_NODE)) {
+        part->flags &= (pm_node_flags_t) ~PM_STRING_FLAGS_MUTABLE;
         part->flags |= PM_STRING_FLAGS_FROZEN | PM_NODE_FLAG_STATIC_LITERAL;
     }
     return part;
@@ -10448,6 +10526,17 @@ pm_yclass_body(struct parser_params *p, NODE *body, const YYLTYPE *loc, const YY
         return body;
     }
     return (pm_node_t *) pm_ystatements_opt(p, body);
+}
+
+/* The interned ID of a symbol literal's value, for the positions that
+ * consume a dynamic symbol as a name (quoted pattern labels). */
+static ID
+pm_ysym_value_id(struct parser_params *p, NODE *node)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_SYMBOL_NODE)) return 0;
+    pm_string_t *unescaped = &((pm_symbol_node_t *) node)->unescaped;
+    return pm_yid_intern(&p->pm->metadata_arena, &p->pm->constant_pool,
+                         pm_string_source(unescaped), pm_string_length(unescaped), p->enc);
 }
 
 /* Stamp the [ ] / ( ) / { } delimiters onto a pattern node. */
@@ -10943,7 +11032,7 @@ pm_yparentheses(struct parser_params *p, NODE *body, const YYLTYPE *opening, con
     if (statements != NULL && statements->body.size > 1) flags = PM_PARENTHESES_NODE_FLAGS_MULTIPLE_STATEMENTS;
     return (NODE *) pm_parentheses_node_new(
         p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
-        (pm_node_t *) statements, pm_yloc(opening), pm_yloc(closing));
+        (pm_node_t *) statements, pm_yloc(opening), pm_yclosing(closing));
 }
 
 /* Attach the keywords to a begin/end block once it closes. */
@@ -11118,11 +11207,12 @@ rb_node_resbody_new(struct parser_params *p, NODE *nd_args, NODE *nd_exc_var, NO
 {
     pm_node_list_t exceptions = { 0 };
     if (nd_args != NULL) {
-        if (PM_NODE_TYPE_P(nd_args, PM_ARRAY_NODE)) {
+        if (PM_NODE_TYPE_P(nd_args, PM_ARRAY_NODE) && ((pm_array_node_t *) nd_args)->opening_loc.length == 0) {
             exceptions = ((pm_array_node_t *) nd_args)->elements;
         }
         else {
-            YSTUB("rb_node_resbody_new");
+            /* a splat (or a lone literal) is a single exception */
+            pm_node_list_append(p->pm->arena, &exceptions, nd_args);
         }
     }
 
@@ -11172,7 +11262,7 @@ rb_node_yield_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc, co
     return (rb_node_yield_t *) pm_yield_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
         pm_yloc(keyword_loc), pm_yloc(lparen_loc),
-        pm_yargs_from_list(p, nd_head), pm_yloc(rparen_loc));
+        pm_yargs_from_list(p, nd_head), pm_yclosing(rparen_loc));
 }
 
 static rb_node_if_t *
@@ -11526,8 +11616,8 @@ static rb_node_dot2_t *
 rb_node_dot2_new(struct parser_params *p, NODE *nd_beg, NODE *nd_end, const YYLTYPE *loc, const YYLTYPE *operator_loc)
 {
     pm_node_flags_t flags = 0;
-    if ((nd_beg == NULL || PM_NODE_FLAG_P(nd_beg, PM_NODE_FLAG_STATIC_LITERAL)) &&
-        (nd_end == NULL || PM_NODE_FLAG_P(nd_end, PM_NODE_FLAG_STATIC_LITERAL))) {
+    if ((nd_beg == NULL || PM_NODE_TYPE_P(nd_beg, PM_INTEGER_NODE)) &&
+        (nd_end == NULL || PM_NODE_TYPE_P(nd_end, PM_INTEGER_NODE))) {
         flags |= PM_NODE_FLAG_STATIC_LITERAL;
     }
     return (rb_node_dot2_t *) pm_range_node_new(
@@ -11539,8 +11629,8 @@ static rb_node_dot3_t *
 rb_node_dot3_new(struct parser_params *p, NODE *nd_beg, NODE *nd_end, const YYLTYPE *loc, const YYLTYPE *operator_loc)
 {
     pm_node_flags_t flags = PM_RANGE_FLAGS_EXCLUDE_END;
-    if ((nd_beg == NULL || PM_NODE_FLAG_P(nd_beg, PM_NODE_FLAG_STATIC_LITERAL)) &&
-        (nd_end == NULL || PM_NODE_FLAG_P(nd_end, PM_NODE_FLAG_STATIC_LITERAL))) {
+    if ((nd_beg == NULL || PM_NODE_TYPE_P(nd_beg, PM_INTEGER_NODE)) &&
+        (nd_end == NULL || PM_NODE_TYPE_P(nd_end, PM_INTEGER_NODE))) {
         flags |= PM_NODE_FLAG_STATIC_LITERAL;
     }
     return (rb_node_dot3_t *) pm_range_node_new(
@@ -11581,7 +11671,7 @@ rb_node_super_new(struct parser_params *p, NODE *nd_args, const YYLTYPE *loc,
     return (rb_node_super_t *) pm_super_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
         pm_yloc(keyword_loc), pm_yloc(lparen_loc),
-        pm_yargs_from_list(p, nd_args), pm_yloc(rparen_loc), block);
+        pm_yargs_from_list(p, nd_args), pm_yclosing(rparen_loc), block);
 }
 
 static rb_node_zsuper_t *
@@ -11970,29 +12060,37 @@ rb_node_imaginary_new(struct parser_params *p, char* val, int base, int seen_poi
         p->pm->arena, ++p->pm->node_id, PM_NODE_FLAG_STATIC_LITERAL, pm_yloc(loc), numeric);
 }
 
+/* Non-ASCII bytes produced by escapes (the source itself is ASCII) force
+ * the encoding onto a literal: valid UTF-8 forces UTF-8, anything else
+ * forces binary. Only a UTF-8 source forces at all. */
+static pm_node_flags_t
+pm_ystr_forced_flags(struct parser_params *p, const pm_string_t *unescaped, pm_location_t content_loc)
+{
+    if (pm_ystr_ascii_only(unescaped)) return 0;
+
+    for (uint32_t i = content_loc.start; i < content_loc.start + content_loc.length; i++) {
+        if (p->pm->start[i] >= 0x80) return 0;
+    }
+    if (p->enc != rb_utf8_encoding()) return 0;
+
+    const uint8_t *bytes = pm_string_source(unescaped);
+    size_t length = pm_string_length(unescaped);
+    for (size_t i = 0; i < length; ) {
+        size_t width = (size_t) p->enc->char_width(bytes + i, (ptrdiff_t) (length - i));
+        if (width == 0) return PM_STRING_FLAGS_FORCED_BINARY_ENCODING;
+        i += width;
+    }
+    return PM_STRING_FLAGS_FORCED_UTF8_ENCODING;
+}
+
 static rb_node_str_t *
 rb_node_str_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc)
 {
     pm_location_t content_loc = pm_yloc(loc);
     pm_string_t unescaped = pm_ystr_take(p, string);
 
-    /* non-ASCII bytes produced by escapes (the source itself is ASCII) force
-     * the encoding onto the literal */
-    pm_node_flags_t flags = 0;
-    if (!pm_ystr_ascii_only(&unescaped)) {
-        bool source_ascii = true;
-        for (uint32_t i = content_loc.start; i < content_loc.start + content_loc.length; i++) {
-            if (p->pm->start[i] >= 0x80) { source_ascii = false; break; }
-        }
-        if (source_ascii) {
-            flags |= (p->enc == rb_utf8_encoding())
-                ? PM_STRING_FLAGS_FORCED_UTF8_ENCODING
-                : PM_STRING_FLAGS_FORCED_BINARY_ENCODING;
-        }
-    }
-
     return (rb_node_str_t *) pm_string_node_new(
-        p->pm->arena, ++p->pm->node_id, flags, content_loc,
+        p->pm->arena, ++p->pm->node_id, pm_ystr_forced_flags(p, &unescaped, content_loc), content_loc,
         (pm_location_t) { 0 }, content_loc, (pm_location_t) { 0 },
         unescaped);
 }
@@ -12647,6 +12745,30 @@ literal_concat(struct parser_params *p, NODE *head, NODE *tail, const YYLTYPE *l
         return head;
     }
 
+    /* two bare chunks of the same literal (a line continuation split them)
+     * merge back into one string; not under a squiggly heredoc, whose
+     * per-line chunks must survive for dedenting */
+    if (head_str && tail_str && p->heredoc_indent <= 0 &&
+        ((pm_string_node_t *) head)->opening_loc.length == 0 &&
+        ((pm_string_node_t *) tail)->opening_loc.length == 0) {
+        pm_string_node_t *head_string = (pm_string_node_t *) head;
+        pm_string_node_t *tail_string = (pm_string_node_t *) tail;
+
+        size_t head_len = pm_string_length(&head_string->unescaped);
+        size_t tail_len = pm_string_length(&tail_string->unescaped);
+        uint8_t *bytes = (uint8_t *) pm_arena_alloc(p->pm->arena, head_len + tail_len, 1);
+        memcpy(bytes, pm_string_source(&head_string->unescaped), head_len);
+        memcpy(bytes + head_len, pm_string_source(&tail_string->unescaped), tail_len);
+        pm_string_constant_init(&head_string->unescaped, (const char *) bytes, head_len + tail_len);
+
+        uint32_t end = tail_string->content_loc.start + tail_string->content_loc.length;
+        head_string->content_loc.length = end - head_string->content_loc.start;
+        head->location = head_string->content_loc;
+        head->flags &= (pm_node_flags_t) ~(PM_STRING_FLAGS_FORCED_UTF8_ENCODING | PM_STRING_FLAGS_FORCED_BINARY_ENCODING);
+        head->flags |= pm_ystr_forced_flags(p, &head_string->unescaped, head_string->content_loc);
+        return head;
+    }
+
     /* a tail with its own quotes is literal adjacency: "a" "b" collects the
      * complete literals as the parts of an unquoted outer carrier */
     bool tail_complete =
@@ -12667,6 +12789,20 @@ literal_concat(struct parser_params *p, NODE *head, NODE *tail, const YYLTYPE *l
         pm_node_list_append(p->pm->arena, &outer->parts, pm_yistr_part(tail));
         uint32_t end = tail->location.start + tail->location.length;
         outer->base.location.length = end - outer->base.location.start;
+
+        bool all_plain = true;
+        for (size_t i = 0; i < outer->parts.size; i++) {
+            if (!PM_NODE_TYPE_P(outer->parts.nodes[i], PM_STRING_NODE)) all_plain = false;
+        }
+        outer->base.flags &= (pm_node_flags_t) ~(PM_NODE_FLAG_STATIC_LITERAL | PM_INTERPOLATED_STRING_NODE_FLAGS_FROZEN | PM_INTERPOLATED_STRING_NODE_FLAGS_MUTABLE);
+        if (all_plain) {
+            if (p->frozen_string_literal == 1) {
+                outer->base.flags |= PM_NODE_FLAG_STATIC_LITERAL | PM_INTERPOLATED_STRING_NODE_FLAGS_FROZEN;
+            }
+            else if (p->frozen_string_literal == 0) {
+                outer->base.flags |= PM_INTERPOLATED_STRING_NODE_FLAGS_MUTABLE;
+            }
+        }
         return (NODE *) outer;
     }
 
@@ -13338,8 +13474,12 @@ assignable(struct parser_params *p, ID id, NODE *val, const YYLTYPE *loc)
 static int
 is_private_local_id(struct parser_params *p, ID name)
 {
-    YSTUB("is_private_local_id");
-    return 0;
+    if (name == idUScore) return 1;
+    if (!is_local_id(name)) return 0;
+    pm_constant_id_t constant_id = pm_yid_to_constant(&p->pm->metadata_arena, &p->pm->constant_pool, name);
+    if (constant_id == PM_CONSTANT_ID_UNSET) return 0;
+    pm_constant_t *constant = pm_constant_pool_id_to_constant(&p->pm->constant_pool, constant_id);
+    return constant->length > 0 && constant->start[0] == '_';
 }
 
 static int
@@ -14072,11 +14212,13 @@ new_hash_pattern_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, co
 static NODE*
 dsym_node(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 {
-    /* the token is :"..." / :'...' (two-byte opener, one-byte closer), or in
-     * label position "...": (one-byte opener, two-byte closer) */
+    /* the token is :"..." / :'...' (two-byte opener, one-byte closer),
+     * %s{...} (three-byte opener), or in label position "...": (one-byte
+     * opener, two-byte closer) */
     pm_location_t location = pm_yloc(loc);
-    bool label = p->pm->start[location.start] != ':';
-    uint32_t open_width = label ? 1 : 2;
+    uint8_t first = p->pm->start[location.start];
+    bool label = first != ':' && first != '%';
+    uint32_t open_width = first == ':' ? 2 : first == '%' ? 3 : 1;
     uint32_t close_width = label ? 2 : 1;
     bool single_quoted = p->pm->start[location.start + open_width - 1] == '\'';
 
@@ -14959,7 +15101,11 @@ pm_yparse(pm_parser_t *pm)
     p->command_start = TRUE;
     p->lex.lpar_beg = -1; /* make lambda_beginning_p() == FALSE at first */
     p->node_id = 0;
-    p->frozen_string_literal = pm->frozen_string_literal;
+    /* prism's tri-state is -1 disabled / 0 unset / 1 enabled; CRuby's field
+     * is -1 unset / 0 false / 1 true */
+    p->frozen_string_literal =
+        pm->frozen_string_literal == PM_OPTIONS_FROZEN_STRING_LITERAL_UNSET ? -1 :
+        pm->frozen_string_literal == PM_OPTIONS_FROZEN_STRING_LITERAL_DISABLED ? 0 : 1;
     p->enc = pm->encoding;
     p->exits = 0;
 
