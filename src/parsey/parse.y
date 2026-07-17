@@ -4439,8 +4439,11 @@ method_call	: fcall paren_args
                     {
                         rb_code_location_t lparen_loc = @2;
                         rb_code_location_t rparen_loc = @2;
-                        YSTUB("grammar"); /* PORTME: lparen_loc.end_pos.column = lparen_loc.beg_pos.column + 1; */
-                        YSTUB("grammar"); /* PORTME: rparen_loc.beg_pos.column = rparen_loc.end_pos.column - 1; */
+                        lparen_loc.end = lparen_loc.beg + 1;
+                        rparen_loc.beg = rparen_loc.end - 1;
+                        /* the constructor takes these directly; drop the
+                         * pending slot paren_args filled */
+                        p->yparens.set = 0;
 
                         $$ = NEW_SUPER($2, &@$, &@1, &lparen_loc, &rparen_loc);
                     }
@@ -9681,8 +9684,12 @@ pm_yargs_from_list(struct parser_params *p, NODE *list)
         return pm_arguments_node_new(p->pm->arena, ++p->pm->node_id, 0, array->base.location, array->elements);
     }
 
-    YSTUB("pm_yargs_from_list");
-    return NULL;
+    /* A single expression (ret_args unwraps one-element lists). */
+    {
+        pm_node_list_t arguments = { 0 };
+        pm_node_list_append(p->pm->arena, &arguments, list);
+        return pm_arguments_node_new(p->pm->arena, ++p->pm->node_id, 0, list->location, arguments);
+    }
 }
 
 /* Record the parentheses of a paren_args reduction for the call about to
@@ -10329,15 +10336,18 @@ rb_node_or_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYP
 static rb_node_return_t *
 rb_node_return_new(struct parser_params *p, NODE *nd_stts, const YYLTYPE *loc, const YYLTYPE *keyword_loc)
 {
-    YSTUB("rb_node_return_new");
-    return NULL;
+    return (rb_node_return_t *) pm_return_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(keyword_loc), pm_yargs_from_list(p, nd_stts));
 }
 
 static rb_node_yield_t *
 rb_node_yield_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *lparen_loc, const YYLTYPE *rparen_loc)
 {
-    YSTUB("rb_node_yield_new");
-    return NULL;
+    return (rb_node_yield_t *) pm_yield_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(keyword_loc), pm_yloc(lparen_loc),
+        pm_yargs_from_list(p, nd_head), pm_yloc(rparen_loc));
 }
 
 static rb_node_if_t *
@@ -10570,15 +10580,18 @@ static rb_node_super_t *
 rb_node_super_new(struct parser_params *p, NODE *nd_args, const YYLTYPE *loc,
                   const YYLTYPE *keyword_loc, const YYLTYPE *lparen_loc, const YYLTYPE *rparen_loc)
 {
-    YSTUB("rb_node_super_new");
-    return NULL;
+    return (rb_node_super_t *) pm_super_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(keyword_loc), pm_yloc(lparen_loc),
+        pm_yargs_from_list(p, nd_args), pm_yloc(rparen_loc), NULL);
 }
 
 static rb_node_zsuper_t *
 rb_node_zsuper_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_zsuper_new");
-    return NULL;
+    return (rb_node_zsuper_t *) pm_forwarding_super_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(loc), NULL);
 }
 
 static rb_node_match2_t *
@@ -11170,15 +11183,19 @@ rb_node_error_new(struct parser_params *p, const YYLTYPE *loc)
 static rb_node_break_t *
 rb_node_break_new(struct parser_params *p, NODE *nd_stts, const YYLTYPE *loc, const YYLTYPE *keyword_loc)
 {
-    YSTUB("rb_node_break_new");
-    return NULL;
+    NODE *node = add_block_exit(p, (NODE *) pm_break_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yargs_from_list(p, nd_stts), pm_yloc(keyword_loc)));
+    return (rb_node_break_t *) node;
 }
 
 static rb_node_next_t *
 rb_node_next_new(struct parser_params *p, NODE *nd_stts, const YYLTYPE *loc, const YYLTYPE *keyword_loc)
 {
-    YSTUB("rb_node_next_new");
-    return NULL;
+    NODE *node = add_block_exit(p, (NODE *) pm_next_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yargs_from_list(p, nd_stts), pm_yloc(keyword_loc)));
+    return (rb_node_next_t *) node;
 }
 
 static rb_node_redo_t *
@@ -12124,8 +12141,13 @@ no_blockarg(struct parser_params *p, NODE *node)
 static NODE *
 ret_args(struct parser_params *p, NODE *node)
 {
-    YSTUB("ret_args");
-    return NULL;
+    if (node) {
+        no_blockarg(p, node);
+        if (PM_NODE_TYPE_P(node, PM_ARRAY_NODE) && ((pm_array_node_t *) node)->elements.size == 1) {
+            node = ((pm_array_node_t *) node)->elements.nodes[0];
+        }
+    }
+    return node;
 }
 
 static NODE*
