@@ -24,6 +24,9 @@
 static inline int
 pm_yenc_precise_mbclen(const char *ptr, const char *end, const pm_encoding_t *enc) {
     if (ptr >= end) return 0;
+    /* every encoding prism supports is ASCII-compatible, so the common case
+     * never needs the table lookup */
+    if ((unsigned char) *ptr < 0x80) return 1;
     return (int) enc->char_width((const uint8_t *) ptr, (ptrdiff_t) (end - ptr));
 }
 

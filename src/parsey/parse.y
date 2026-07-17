@@ -960,10 +960,11 @@ struct parser_params {
     stack_type cmdarg_stack;
 
     /* String content carried across an interpolation or an interleaved
-     * heredoc body: the accumulated bytes plus the byte-offset span, which
-     * is what the content token's location must report. */
+     * heredoc body: the byte-offset span the content token's location must
+     * report. (Upstream accumulates the bytes too, for ripper and the token
+     * list; nothing in the fork reads them.) */
     struct {
-        rb_parser_string_t *token;
+        unsigned int active: 1;
         uint32_t beg;
         uint32_t end;
     } delayed;
@@ -6027,7 +6028,7 @@ do { \
 # define yylval_id() (yylval.id)
 
 #define set_yylval_noname() set_yylval_id(keyword_nil)
-#define has_delayed_token(p) (p->delayed.token != NULL)
+#define has_delayed_token(p) (p->delayed.active)
 
 #define literal_flush(p, ptr) ((p)->lex.ptok = (ptr))
 #define dispatch_scan_event(p, t) parser_dispatch_scan_event(p, t)
@@ -6047,8 +6048,7 @@ parser_dispatch_delayed_token(struct parser_params *p, enum yytokentype t)
 
     p->yylloc->beg = p->delayed.beg;
     p->yylloc->end = p->delayed.end;
-    rb_parser_string_free(p, p->delayed.token);
-    p->delayed.token = NULL;
+    p->delayed.active = 0;
 }
 
 /*
@@ -6077,10 +6077,9 @@ parser_add_delayed_token(struct parser_params *p, const char *tok, const char *e
             }
         }
         if (!has_delayed_token(p)) {
-            p->delayed.token = rb_parser_string_new(p, 0, 0);
+            p->delayed.active = 1;
             p->delayed.beg = YOFF(tok);
         }
-        parser_str_cat(p->delayed.token, tok, (long) (end - tok));
         p->delayed.end = YOFF(end);
         p->lex.ptok = end;
     }
@@ -7035,6 +7034,11 @@ regx_options(struct parser_params *p)
 static int
 tokadd_mbchar(struct parser_params *p, int c)
 {
+    /* the ASCII fast path: width one, nothing to validate or copy */
+    if ((unsigned int) c < 0x80) {
+        tokadd(p, c);
+        return c;
+    }
     int len = parser_precise_mbclen(p, p->lex.pcur-1);
     if (len < 0) return -1;
     tokadd(p, c);
@@ -7267,7 +7271,6 @@ flush_string_content(struct parser_params *p, rb_encoding *enc, size_t back)
     if (has_delayed_token(p)) {
         ptrdiff_t len = p->lex.pcur - p->lex.ptok;
         if (len > 0) {
-            rb_parser_enc_str_buf_cat(p, p->delayed.token, p->lex.ptok, len, enc);
             p->delayed.end = YOFF(p->lex.pcur);
         }
         dispatch_delayed_token(p, tSTRING_CONTENT);
@@ -8142,6 +8145,8 @@ parser_magic_comment(struct parser_params *p, const char *str, long len)
         : (void)((_s) = STR_NEW((_p), (_n))))
 
     if (len <= 7) return FALSE;
+    /* every magic comment form contains a colon; most comments do not */
+    if (!memchr(str, ':', (size_t) len)) return FALSE;
     if (!!(beg = magic_comment_marker(str, len))) {
         if (!(end = magic_comment_marker(beg, str + len - beg)))
             return FALSE;
@@ -8986,6 +8991,21 @@ parse_ident(struct parser_params *p, int c, int cmd_state)
     do {
         if (!ISASCII(c)) is_ascii = false;
         if (tokadd_mbchar(p, c) == -1) return 0;
+        /* fork: consume the rest of an ASCII identifier run in one step */
+        {
+            const char *ptr = p->lex.pcur;
+            const char *end = p->lex.pend;
+            while (ptr < end) {
+                unsigned char ch = (unsigned char) *ptr;
+                if (ch >= 0x80 || (!ISALNUM(ch) && ch != '_')) break;
+                ptr++;
+            }
+            if (ptr > p->lex.pcur) {
+                int n = (int) (ptr - p->lex.pcur);
+                p->lex.pcur = ptr;
+                tokcopy(p, n);
+            }
+        }
         c = nextc(p);
     } while (parser_is_identchar(p));
     if ((c == '!' || c == '?') && !peek(p, '=')) {
@@ -9151,6 +9171,12 @@ parser_yylex(struct parser_params *p)
       case ' ': case '\t': case '\f':
       case '\13': /* '\v' */
         space_seen = 1;
+        /* fork: skip the run of plain blanks in one step */
+        while (p->lex.pcur < p->lex.pend) {
+            unsigned char ch = (unsigned char) *p->lex.pcur;
+            if (ch != ' ' && ch != '\t' && ch != '\f' && ch != '\13') break;
+            p->lex.pcur++;
+        }
         while ((c = nextc(p))) {
             switch (c) {
               case '\r':
