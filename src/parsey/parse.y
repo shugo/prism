@@ -986,6 +986,10 @@ struct parser_params {
     NODE *yrest_param;
     NODE *ykwrest_param;
     NODE *yblock_param;
+
+    /* fork: a &block argument parked by arg_blk_pass for the call about to
+     * consume its arguments; prism hangs it on the call, not the list. */
+    NODE *yblock_pass;
     int tokidx;
     int toksiz;
     int heredoc_end;
@@ -1411,8 +1415,10 @@ static NODE *pm_yarray_brackets(struct parser_params *p, NODE *node, const YYLTY
 static NODE *pm_ybegin_keywords(struct parser_params *p, NODE *node, const YYLTYPE *begin_loc, const YYLTYPE *end_loc);
 static NODE *pm_yparentheses(struct parser_params *p, NODE *body, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static void pm_ydef_head(struct parser_params *p, NODE *node, const YYLTYPE *def_loc, const YYLTYPE *operator_loc, const YYLTYPE *name_loc);
+static void pm_ydef_parens(struct parser_params *p, NODE *node);
 static NODE *pm_ydef_finish(struct parser_params *p, NODE *node, NODE *args, NODE *body, const YYLTYPE *loc, const YYLTYPE *end_loc);
 static NODE *pm_yassoc(struct parser_params *p, NODE *key, NODE *value, const YYLTYPE *operator_loc, const YYLTYPE *loc);
+static NODE *pm_yassoc_splat(struct parser_params *p, NODE *value, const YYLTYPE *operator_loc, const YYLTYPE *loc);
 static NODE *pm_ylabel_symbol(struct parser_params *p, ID label, const YYLTYPE *loc);
 static NODE *pm_yhash_braces(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static NODE *pm_ytarget(struct parser_params *p, NODE *node);
@@ -1735,7 +1741,7 @@ static rb_node_args_t *args_with_numbered(struct parser_params*,rb_node_args_t*,
 static NODE* negate_lit(struct parser_params*, NODE*,const YYLTYPE*);
 static void no_blockarg(struct parser_params*,NODE*);
 static NODE *ret_args(struct parser_params*,NODE*);
-static NODE *arg_blk_pass(NODE*,rb_node_block_pass_t*);
+static NODE *arg_blk_pass(struct parser_params*,NODE*,rb_node_block_pass_t*);
 static NODE *dsym_node(struct parser_params*,NODE*,const YYLTYPE*);
 
 static NODE *gettable(struct parser_params*,ID,const YYLTYPE*);
@@ -3594,19 +3600,23 @@ call_args	: value_expr(command)
                     }
                 | args opt_block_arg
                     {
-                        $$ = arg_blk_pass($1, $2);
+                        $$ = arg_blk_pass(p, $1, $2);
                     }
                 | assocs opt_block_arg
                     {
                         $$ = $1 ? NEW_LIST(new_hash(p, $1, &@1), &@1) : 0;
-                        $$ = arg_blk_pass($$, $2);
+                        $$ = arg_blk_pass(p, $$, $2);
                     }
                 | args ',' assocs opt_block_arg
                     {
                         $$ = $3 ? arg_append(p, $1, new_hash(p, $3, &@3), &@$) : $1;
-                        $$ = arg_blk_pass($$, $4);
+                        $$ = arg_blk_pass(p, $$, $4);
                     }
                 | block_arg
+                    {
+                        /* fork: a lone &block also parks; there is no list */
+                        $$ = arg_blk_pass(p, 0, (rb_node_block_pass_t *) $1);
+                    }
                 ;
 
 command_args	:   {
@@ -3682,7 +3692,7 @@ args		: arg_value
                     }
                 | args[non_last_args] ',' arg_splat
                     {
-                        YSTUB("grammar"); /* PORTME: $$ = rest_arg_append(p, $non_last_args, RNODE_SPLAT($arg_splat)->nd_head, &@$); */
+                        $$ = rest_arg_append(p, $non_last_args, $arg_splat, &@$);
                     }
                 ;
 
@@ -3981,6 +3991,9 @@ primary		: inline_primary
             | defn_head[head]
               f_arglist[args]
                 {
+                    /* fork: claim the parameter parens before the body's
+                     * calls can overwrite the pending slot */
+                    pm_ydef_parens(p, (NODE *) $head->nd_def);
                 }
               bodystmt
               k_end
@@ -3992,6 +4005,9 @@ primary		: inline_primary
             | defs_head[head]
               f_arglist[args]
                 {
+                    /* fork: claim the parameter parens before the body's
+                     * calls can overwrite the pending slot */
+                    pm_ydef_parens(p, (NODE *) $head->nd_def);
                 }
               bodystmt
               k_end
@@ -5744,13 +5760,12 @@ assoc		: arg_value tASSOC arg_value
                     }
                 | tDSTAR arg_value
                     {
-                        $$ = list_append(p, NEW_LIST(0, &@$), $2);
+                        $$ = NEW_LIST(pm_yassoc_splat(p, $2, &@1, &@$), &@$);
                     }
                 | tDSTAR
                     {
                         forwarding_arg_check(p, idFWD_KWREST, idFWD_ALL, "keyword rest");
-                        $$ = list_append(p, NEW_LIST(0, &@$),
-                                         NEW_LVAR(idFWD_KWREST, &@$));
+                        $$ = NEW_LIST(pm_yassoc_splat(p, NEW_LVAR(idFWD_KWREST, &@$), &@1, &@$), &@$);
                     }
                 ;
 
@@ -9745,17 +9760,54 @@ pm_yargs_from_list(struct parser_params *p, NODE *list)
 {
     if (list == NULL || NODE_EMPTY_ARGS_P(list)) return NULL;
 
+    pm_node_list_t arguments = { 0 };
+    pm_location_t location;
     if (PM_NODE_TYPE_P(list, PM_ARRAY_NODE)) {
-        pm_array_node_t *array = (pm_array_node_t *) list;
-        return pm_arguments_node_new(p->pm->arena, ++p->pm->node_id, 0, array->base.location, array->elements);
+        arguments = ((pm_array_node_t *) list)->elements;
+        location = list->location;
+    }
+    else {
+        /* a single expression (ret_args unwraps one-element lists) */
+        pm_node_list_append(p->pm->arena, &arguments, list);
+        location = list->location;
     }
 
-    /* A single expression (ret_args unwraps one-element lists). */
-    {
-        pm_node_list_t arguments = { 0 };
-        pm_node_list_append(p->pm->arena, &arguments, list);
-        return pm_arguments_node_new(p->pm->arena, ++p->pm->node_id, 0, list->location, arguments);
+    pm_node_flags_t flags = 0;
+    size_t splats = 0;
+    for (size_t i = 0; i < arguments.size; i++) {
+        pm_node_t *argument = arguments.nodes[i];
+        if (argument == NULL) continue;
+        switch (PM_NODE_TYPE(argument)) {
+          case PM_SPLAT_NODE:
+            splats++;
+            break;
+          case PM_KEYWORD_HASH_NODE: {
+            flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORDS;
+            pm_node_list_t pairs = ((pm_keyword_hash_node_t *) argument)->elements;
+            for (size_t j = 0; j < pairs.size; j++) {
+                if (PM_NODE_TYPE_P(pairs.nodes[j], PM_ASSOC_SPLAT_NODE)) {
+                    flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_KEYWORD_SPLAT;
+                }
+            }
+            break;
+          }
+          default:
+            break;
+        }
     }
+    if (splats > 0) flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_SPLAT;
+    if (splats > 1) flags |= PM_ARGUMENTS_NODE_FLAGS_CONTAINS_MULTIPLE_SPLATS;
+
+    return pm_arguments_node_new(p->pm->arena, ++p->pm->node_id, flags, location, arguments);
+}
+
+/* Attach the pending &block argument, if any, to the given call. */
+static void
+pm_yblock_pass_take(struct parser_params *p, pm_call_node_t *call)
+{
+    if (p->yblock_pass == NULL) return;
+    call->block = p->yblock_pass;
+    p->yblock_pass = NULL;
 }
 
 /* Record the parentheses of a paren_args reduction for the call about to
@@ -9833,6 +9885,7 @@ pm_yfcall_args(struct parser_params *p, NODE *node, NODE *args, const YYLTYPE *l
     if (NODE_EMPTY_ARGS_P(args)) args = 0;
     call->arguments = pm_yargs_from_list(p, args);
     pm_yparens_take(p, call);
+    pm_yblock_pass_take(p, call);
     call->base.location = pm_yloc(loc);
     return node;
 }
@@ -10118,19 +10171,28 @@ pm_ylabel_symbol(struct parser_params *p, ID label, const YYLTYPE *loc)
         str == NULL ? PM_STRING_EMPTY : pm_ystr_take(p, str));
 }
 
+/* A **value pair in a hash or argument list. */
+static NODE *
+pm_yassoc_splat(struct parser_params *p, NODE *value, const YYLTYPE *operator_loc, const YYLTYPE *loc)
+{
+    return (NODE *) pm_assoc_splat_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), value, pm_yloc(operator_loc));
+}
+
 /* Attach the braces to a hash literal, with the array-style static fold. */
 static NODE *
 pm_yhash_braces(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc)
 {
-    if (node == NULL || !PM_NODE_TYPE_P(node, PM_HASH_NODE)) {
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_KEYWORD_HASH_NODE)) {
         YSTUB("pm_yhash_braces");
         return node;
     }
 
-    pm_hash_node_t *hash = (pm_hash_node_t *) node;
-    hash->opening_loc = pm_yloc(opening);
-    hash->closing_loc = pm_yloc(closing);
-    hash->base.location = pm_yloc(loc);
+    /* the braced literal is a HashNode; new_hash built the keyword shape */
+    pm_node_list_t elements = ((pm_keyword_hash_node_t *) node)->elements;
+    pm_hash_node_t *hash = pm_hash_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(opening), elements, pm_yloc(closing));
 
     bool is_static = true;
     for (size_t i = 0; i < hash->elements.size; i++) {
@@ -10141,7 +10203,7 @@ pm_yhash_braces(struct parser_params *p, NODE *node, const YYLTYPE *opening, con
     }
     if (is_static) hash->base.flags |= PM_NODE_FLAG_STATIC_LITERAL;
 
-    return node;
+    return (NODE *) hash;
 }
 
 /* Build a marker parameter (*rest, **kwrest, &block) at its reduction and
@@ -10302,13 +10364,19 @@ pm_ydef_finish(struct parser_params *p, NODE *node, NODE *args, NODE *body, cons
         }
     }
 
-    if (p->yparens.set) {
-        def->lparen_loc = pm_yloc(&p->yparens.opening);
-        def->rparen_loc = pm_yloc(&p->yparens.closing);
-        p->yparens.set = 0;
-    }
-
     return node;
+}
+
+/* Claim the parameter-list parens for a def right after f_arglist reduces:
+ * by the time the def closes, calls in the body will have reused the slot. */
+static void
+pm_ydef_parens(struct parser_params *p, NODE *node)
+{
+    if (!p->yparens.set || node == NULL || !PM_NODE_TYPE_P(node, PM_DEF_NODE)) return;
+    pm_def_node_t *def = (pm_def_node_t *) node;
+    def->lparen_loc = pm_yloc(&p->yparens.opening);
+    def->rparen_loc = pm_yloc(&p->yparens.closing);
+    p->yparens.set = 0;
 }
 
 /* An else clause, built at the opt_else reduction, which is the last moment
@@ -10891,10 +10959,12 @@ static rb_node_super_t *
 rb_node_super_new(struct parser_params *p, NODE *nd_args, const YYLTYPE *loc,
                   const YYLTYPE *keyword_loc, const YYLTYPE *lparen_loc, const YYLTYPE *rparen_loc)
 {
+    pm_node_t *block = p->yblock_pass;
+    p->yblock_pass = NULL;
     return (rb_node_super_t *) pm_super_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
         pm_yloc(keyword_loc), pm_yloc(lparen_loc),
-        pm_yargs_from_list(p, nd_args), pm_yloc(rparen_loc), NULL);
+        pm_yargs_from_list(p, nd_args), pm_yloc(rparen_loc), block);
 }
 
 static rb_node_zsuper_t *
@@ -11040,6 +11110,8 @@ rb_node_gvar_new(struct parser_params *p, ID nd_vid, const YYLTYPE *loc)
 static rb_node_lvar_t *
 rb_node_lvar_new(struct parser_params *p, ID nd_vid, const YYLTYPE *loc)
 {
+    /* the anonymous forwarding markers read as an absent expression */
+    if (nd_vid == idFWD_REST || nd_vid == idFWD_KWREST || nd_vid == idFWD_BLOCK) return NULL;
     return (rb_node_lvar_t *) pm_local_variable_read_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), YID2CONST(nd_vid), 0);
 }
 
@@ -11455,15 +11527,15 @@ rb_node_argspush_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, cons
 static rb_node_splat_t *
 rb_node_splat_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc, const YYLTYPE *operator_loc)
 {
-    YSTUB("rb_node_splat_new");
-    return NULL;
+    return (rb_node_splat_t *) pm_splat_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), pm_yloc(operator_loc), nd_head);
 }
 
 static rb_node_block_pass_t *
 rb_node_block_pass_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc, const YYLTYPE *operator_loc)
 {
-    YSTUB("rb_node_block_pass_new");
-    return NULL;
+    return (rb_node_block_pass_t *) pm_block_argument_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), nd_body, pm_yloc(operator_loc));
 }
 
 static rb_node_alias_t *
@@ -11940,6 +12012,7 @@ new_qcall(struct parser_params* p, ID atype, NODE *recv, ID mid, NODE *args, con
         }
 
         pm_yparens_take(p, call);
+        pm_yblock_pass_take(p, call);
     }
     return qcall;
 }
@@ -12403,8 +12476,17 @@ rb_backref_error(struct parser_params *p, NODE *node)
 static NODE *
 arg_append(struct parser_params *p, NODE *node1, NODE *node2, const YYLTYPE *loc)
 {
-    YSTUB("arg_append");
-    return NULL;
+    if (node1 == NULL) {
+        YYLTYPE item_loc = node2 ? pm_yloc_of(node2) : *loc;
+        return NEW_LIST(node2, &item_loc);
+    }
+    if (PM_NODE_TYPE_P(node1, PM_ARRAY_NODE)) return list_append(p, node1, node2);
+
+    /* a single leading expression (a splat, or ret_args' unwrapping) grows
+     * into a carrier holding both */
+    YYLTYPE head_loc = pm_yloc_of(node1);
+    NODE *list = NEW_LIST(node1, &head_loc);
+    return list_append(p, list, node2);
 }
 
 static NODE *
@@ -12427,8 +12509,13 @@ last_arg_append(struct parser_params *p, NODE *args, NODE *last_arg, const YYLTY
 static NODE *
 rest_arg_append(struct parser_params *p, NODE *args, NODE *rest_arg, const YYLTYPE *loc)
 {
-    YSTUB("rest_arg_append");
-    return NULL;
+    /* the fork passes the whole SplatNode; a bare value (the mrhs form)
+     * still waits on the masgn port */
+    if (rest_arg == NULL || !PM_NODE_TYPE_P(rest_arg, PM_SPLAT_NODE)) {
+        YSTUB("rest_arg_append");
+        return args;
+    }
+    return arg_append(p, args, rest_arg, loc);
 }
 
 static NODE *
@@ -12666,8 +12753,11 @@ logop(struct parser_params *p, ID id, NODE *left, NODE *right,
 static void
 no_blockarg(struct parser_params *p, NODE *node)
 {
-    /* PORTME: rejects a block-pass argument here, which cannot be built
-     * until block-pass is ported */
+    (void) node;
+    if (p->yblock_pass != NULL) {
+        p->yblock_pass = NULL;
+        compile_error(p, "block argument should not be given");
+    }
 }
 
 static NODE *
@@ -12711,8 +12801,9 @@ negate_lit(struct parser_params *p, NODE* node, const YYLTYPE *loc)
 }
 
 static NODE *
-arg_blk_pass(NODE *node1, rb_node_block_pass_t *node2)
+arg_blk_pass(struct parser_params *p, NODE *node1, rb_node_block_pass_t *node2)
 {
+    if (node2) p->yblock_pass = (NODE *) node2;
     return node1;
 }
 
@@ -12894,9 +12985,21 @@ new_hash(struct parser_params *p, NODE *hash, const YYLTYPE *loc)
         location = hash->location;
     }
 
-    return (NODE *) pm_hash_node_new(
-        p->pm->arena, ++p->pm->node_id, 0, location,
-        (pm_location_t) { 0 }, elements, (pm_location_t) { 0 });
+    /* the keyword form is what argument lists want; the braced hash literal
+     * re-expresses it in pm_yhash_braces */
+    pm_node_flags_t flags = PM_KEYWORD_HASH_NODE_FLAGS_SYMBOL_KEYS;
+    for (size_t i = 0; i < elements.size; i++) {
+        pm_node_t *element = elements.nodes[i];
+        if (!PM_NODE_TYPE_P(element, PM_ASSOC_NODE) ||
+            ((pm_assoc_node_t *) element)->key == NULL ||
+            !PM_NODE_TYPE_P(((pm_assoc_node_t *) element)->key, PM_SYMBOL_NODE)) {
+            flags = 0;
+            break;
+        }
+    }
+
+    return (NODE *) pm_keyword_hash_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, location, elements);
 }
 
 static void
@@ -13283,8 +13386,34 @@ add_forwarding_args(struct parser_params *p)
 static void
 forwarding_arg_check(struct parser_params *p, ID arg, ID all, const char *var)
 {
-    YSTUB("forwarding_arg_check");
-    return;
+    bool conflict = false;
+
+    struct vtable *vars, *args;
+
+    vars = p->lvtbl->vars;
+    args = p->lvtbl->args;
+
+    while (vars && !DVARS_TERMINAL_P(vars->prev)) {
+        conflict |= (vtable_included(args, arg) && !(all && vtable_included(args, all)));
+        vars = vars->prev;
+        args = args->prev;
+    }
+
+    bool found = false;
+    if (vars && vars->prev == DVARS_INHERIT && !found) {
+        found = 0; /* PORTME: outer eval scopes arrive with the scopes option */
+    }
+    else {
+        found = (vtable_included(args, arg) &&
+                 !(all && vtable_included(args, all)));
+    }
+
+    if (!found) {
+        compile_error(p, "no anonymous %s parameter", var);
+    }
+    else if (conflict) {
+        compile_error(p, "anonymous %s parameter is also used within block", var);
+    }
 }
 
 static NODE *
