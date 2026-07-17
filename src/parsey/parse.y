@@ -1422,6 +1422,8 @@ static NODE *pm_yassoc_splat(struct parser_params *p, NODE *value, const YYLTYPE
 static NODE *pm_ylabel_symbol(struct parser_params *p, ID label, const YYLTYPE *loc);
 static NODE *pm_yhash_braces(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static NODE *pm_ytarget(struct parser_params *p, NODE *node);
+static NODE *pm_yarray_finalize(struct parser_params *p, NODE *node);
+static void pm_ymulti_parens(struct parser_params *p, NODE *node, const YYLTYPE *lparen, const YYLTYPE *rparen);
 static NODE *pm_yensure(struct parser_params *p, NODE *body, const YYLTYPE *ensure_loc, const YYLTYPE *loc);
 static NODE *pm_yrescue_finish(struct parser_params *p, NODE *node, const YYLTYPE *keyword_loc, const YYLTYPE *then_loc);
 static NODE *pm_yrescue_modifier(struct parser_params *p, NODE *expr, NODE *fallback, const YYLTYPE *keyword_loc, const YYLTYPE *loc);
@@ -3107,6 +3109,7 @@ mlhs		: mlhs_basic
                 | tLPAREN mlhs_inner rparen
                     {
                         $$ = $2;
+                        pm_ymulti_parens(p, (NODE *) $$, &@1, &@3);
                     }
                 ;
 
@@ -3163,6 +3166,7 @@ mlhs_item	: mlhs_node
                 | tLPAREN mlhs_inner rparen
                     {
                         $$ = (NODE *)$2;
+                        pm_ymulti_parens(p, $$, &@1, &@3);
                     }
                 ;
 
@@ -9939,6 +9943,44 @@ pm_ylocals(struct parser_params *p)
     return locals;
 }
 
+/* Fold the static-literal / contains-splat flags onto a bracketless array
+ * (an mrhs list or an svalue splat) the way the hand parser marks values. */
+static NODE *
+pm_yarray_finalize(struct parser_params *p, NODE *node)
+{
+    (void) p;
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_ARRAY_NODE)) return node;
+
+    pm_array_node_t *array = (pm_array_node_t *) node;
+    if (array->opening_loc.length > 0) return node; /* a real literal, already folded */
+
+    bool is_static = array->elements.size > 0;
+    for (size_t i = 0; i < array->elements.size; i++) {
+        pm_node_t *element = array->elements.nodes[i];
+        if (PM_NODE_TYPE_P(element, PM_SPLAT_NODE)) {
+            array->base.flags |= PM_ARRAY_NODE_FLAGS_CONTAINS_SPLAT;
+            is_static = false;
+        }
+        else if (!PM_NODE_FLAG_P(element, PM_NODE_FLAG_STATIC_LITERAL) ||
+                 PM_NODE_TYPE_P(element, PM_ARRAY_NODE) || PM_NODE_TYPE_P(element, PM_HASH_NODE)) {
+            is_static = false;
+        }
+    }
+    if (is_static) array->base.flags |= PM_NODE_FLAG_STATIC_LITERAL;
+    return node;
+}
+
+/* Stamp the parentheses of an (a, b) group onto its target node. */
+static void
+pm_ymulti_parens(struct parser_params *p, NODE *node, const YYLTYPE *lparen, const YYLTYPE *rparen)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_MULTI_TARGET_NODE)) return;
+    pm_multi_target_node_t *target = (pm_multi_target_node_t *) node;
+    target->lparen_loc = pm_yloc(lparen);
+    target->rparen_loc = pm_yloc(rparen);
+    target->base.location = (pm_location_t) { lparen->beg, rparen->end - lparen->beg };
+}
+
 /* A write node built by assignable() re-expressed as prism's target node,
  * for the positions that bind without assigning (rescue => e, for x in ...). */
 static NODE *
@@ -9960,10 +10002,34 @@ pm_ytarget(struct parser_params *p, NODE *node)
         return (NODE *) pm_class_variable_target_node_new(p->pm->arena, ++p->pm->node_id, 0, loc, ((pm_class_variable_write_node_t *) node)->name);
       case PM_CONSTANT_WRITE_NODE:
         return (NODE *) pm_constant_target_node_new(p->pm->arena, ++p->pm->node_id, 0, loc, ((pm_constant_write_node_t *) node)->name);
-      default:
-        YSTUB("pm_ytarget");
+      case PM_CONSTANT_PATH_WRITE_NODE: {
+        pm_constant_path_node_t *path = ((pm_constant_path_write_node_t *) node)->target;
+        return (NODE *) pm_constant_path_target_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, path->base.location,
+            path->parent, path->name, path->delimiter_loc, path->name_loc);
+      }
+      case PM_CALL_NODE: {
+        pm_call_node_t *call = (pm_call_node_t *) node;
+        if (!PM_NODE_FLAG_P(node, PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE)) break;
+        if (call->opening_loc.length > 0) {
+            /* an index write: a[i] */
+            return (NODE *) pm_index_target_node_new(
+                p->pm->arena, ++p->pm->node_id, PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE, loc,
+                call->receiver, call->opening_loc, call->arguments, call->closing_loc,
+                (pm_block_argument_node_t *) call->block);
+        }
+        return (NODE *) pm_call_target_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, loc,
+            call->receiver, call->call_operator_loc, call->name, call->message_loc);
+      }
+      case PM_MULTI_TARGET_NODE:
+        /* a nested (a, b) group is already a target */
         return node;
+      default:
+        break;
     }
+    YSTUB("pm_ytarget");
+    return node;
 }
 
 /* An ensure clause; the end keyword arrives when the enclosing block closes. */
@@ -11024,8 +11090,78 @@ rb_node_hash_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc)
 static rb_node_masgn_t *
 rb_node_masgn_new(struct parser_params *p, NODE *nd_head, NODE *nd_args, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_masgn_new");
-    return NULL;
+    pm_location_t location = pm_yloc(loc);
+
+    pm_node_list_t lefts = { 0 };
+    if (nd_head != NULL && PM_NODE_TYPE_P(nd_head, PM_ARRAY_NODE)) {
+        pm_node_list_t items = ((pm_array_node_t *) nd_head)->elements;
+        for (size_t i = 0; i < items.size; i++) {
+            pm_node_list_append(p->pm->arena, &lefts, pm_ytarget(p, items.nodes[i]));
+        }
+    }
+
+    /* a postarg carrier splits into the rest and the trailing targets */
+    NODE *rest_node = nd_args;
+    pm_node_list_t rights = { 0 };
+    if (nd_args != NULL && !NODE_NAMED_REST_P(nd_args)) {
+        /* NODE_SPECIAL_NO_NAME_REST: a bare star */
+        rest_node = NODE_SPECIAL_NO_NAME_REST;
+    }
+    else if (nd_args != NULL && PM_NODE_TYPE_P(nd_args, PM_ARRAY_NODE)) {
+        pm_node_list_t parts = ((pm_array_node_t *) nd_args)->elements;
+        rest_node = (NODE *) parts.nodes[0];
+        NODE *posts = (NODE *) parts.nodes[1];
+        if (posts != NULL && PM_NODE_TYPE_P(posts, PM_ARRAY_NODE)) {
+            pm_node_list_t items = ((pm_array_node_t *) posts)->elements;
+            for (size_t i = 0; i < items.size; i++) {
+                pm_node_list_append(p->pm->arena, &rights, pm_ytarget(p, items.nodes[i]));
+            }
+        }
+    }
+
+    pm_node_t *rest = NULL;
+    if (rest_node != NULL) {
+        /* the star sits between the last left (or the start) and the rest's
+         * own name (or the first post, or the end); nothing else in that
+         * range can be a star */
+        uint32_t lo = location.start;
+        if (lefts.size > 0) {
+            pm_node_t *last = lefts.nodes[lefts.size - 1];
+            lo = last->location.start + last->location.length;
+        }
+        uint32_t hi;
+        if (NODE_NAMED_REST_P(rest_node)) hi = rest_node->location.start;
+        else if (rights.size > 0) hi = rights.nodes[0]->location.start;
+        else hi = location.start + location.length;
+
+        pm_location_t star = { 0 };
+        for (uint32_t scan = lo; scan < hi; scan++) {
+            if (p->pm->start[scan] == '*') { star = (pm_location_t) { scan, 1 }; break; }
+        }
+
+        if (NODE_NAMED_REST_P(rest_node)) {
+            NODE *expression = pm_ytarget(p, rest_node);
+            pm_location_t splat_loc = star;
+            if (expression != NULL) {
+                splat_loc.length = (expression->location.start + expression->location.length) - splat_loc.start;
+            }
+            rest = (pm_node_t *) pm_splat_node_new(
+                p->pm->arena, ++p->pm->node_id, 0, splat_loc, star, expression);
+        }
+        else {
+            rest = (pm_node_t *) pm_splat_node_new(
+                p->pm->arena, ++p->pm->node_id, 0, star, star, NULL);
+        }
+    }
+    else if (location.length > 0 && p->pm->start[location.start + location.length - 1] == ',') {
+        /* a trailing comma is an implicit rest: a, = value */
+        pm_location_t comma = { location.start + location.length - 1, 1 };
+        rest = (pm_node_t *) pm_implicit_rest_node_new(p->pm->arena, ++p->pm->node_id, 0, comma);
+    }
+
+    return (rb_node_masgn_t *) pm_multi_target_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, location,
+        lefts, rest, rights, (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static rb_node_gasgn_t *
@@ -11506,8 +11642,14 @@ rb_node_kw_arg_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 static rb_node_postarg_t *
 rb_node_postarg_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_postarg_new");
-    return NULL;
+    /* a two-slot carrier: the rest target (or the no-name marker, never
+     * dereferenced) and the carrier of trailing targets */
+    pm_node_list_t parts = { 0 };
+    pm_node_list_append(p->pm->arena, &parts, (pm_node_t *) nd_1st);
+    pm_node_list_append(p->pm->arena, &parts, (pm_node_t *) nd_2nd);
+    return (rb_node_postarg_t *) pm_array_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), parts,
+        (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static rb_node_argscat_t *
@@ -12509,11 +12651,23 @@ last_arg_append(struct parser_params *p, NODE *args, NODE *last_arg, const YYLTY
 static NODE *
 rest_arg_append(struct parser_params *p, NODE *args, NODE *rest_arg, const YYLTYPE *loc)
 {
-    /* the fork passes the whole SplatNode; a bare value (the mrhs form)
-     * still waits on the masgn port */
-    if (rest_arg == NULL || !PM_NODE_TYPE_P(rest_arg, PM_SPLAT_NODE)) {
+    if (rest_arg == NULL) {
         YSTUB("rest_arg_append");
         return args;
+    }
+
+    /* the args rules pass the whole SplatNode; the mrhs form passes the bare
+     * value, with the star just before it */
+    if (!PM_NODE_TYPE_P(rest_arg, PM_SPLAT_NODE)) {
+        uint32_t scan = rest_arg->location.start;
+        while (scan > 0 && p->pm->start[scan - 1] != '*') scan--;
+        pm_location_t star = { 0 };
+        if (scan > 0) star = (pm_location_t) { scan - 1, 1 };
+
+        pm_location_t splat_loc = star;
+        splat_loc.length = (rest_arg->location.start + rest_arg->location.length) - splat_loc.start;
+        rest_arg = (NODE *) pm_splat_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, splat_loc, star, rest_arg);
     }
     return arg_append(p, args, rest_arg, loc);
 }
@@ -12553,6 +12707,19 @@ node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ct
         if (scan < rhs->location.start) operator_loc = (pm_location_t) { scan, 1 };
     }
 
+    /* an mrhs value: a lone splat becomes a one-element array, and a
+     * bracketless list picks up its flags (a bracketed literal is untouched) */
+    if (rhs != NULL && PM_NODE_TYPE_P(rhs, PM_SPLAT_NODE)) {
+        pm_node_list_t elements = { 0 };
+        pm_node_list_append(p->pm->arena, &elements, rhs);
+        rhs = (NODE *) pm_array_node_new(
+            p->pm->arena, ++p->pm->node_id, PM_ARRAY_NODE_FLAGS_CONTAINS_SPLAT,
+            rhs->location, elements, (pm_location_t) { 0 }, (pm_location_t) { 0 });
+    }
+    else {
+        rhs = pm_yarray_finalize(p, rhs);
+    }
+
     switch (PM_NODE_TYPE(lhs)) {
       case PM_LOCAL_VARIABLE_WRITE_NODE:
         ((pm_local_variable_write_node_t *) lhs)->operator_loc = operator_loc;
@@ -12572,6 +12739,13 @@ node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ct
       case PM_CONSTANT_PATH_WRITE_NODE:
         ((pm_constant_path_write_node_t *) lhs)->operator_loc = operator_loc;
         goto assign;
+      case PM_MULTI_TARGET_NODE: {
+        pm_multi_target_node_t *target = (pm_multi_target_node_t *) lhs;
+        return (NODE *) pm_multi_write_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+            target->lefts, target->rest, target->rights,
+            target->lparen_loc, target->rparen_loc, operator_loc, rhs);
+      }
       assign:
         set_nd_value(p, lhs, rhs);
         lhs->location = pm_yloc(loc);
