@@ -948,6 +948,16 @@ struct parser_params {
         int end_line;
         int end_col;
     } delayed;
+
+    /* fork: the parenthesis locations of the paren_args just reduced, consumed
+     * by the call that attaches those arguments. A single slot suffices: the
+     * grammar reduces an inner call completely before the enclosing
+     * paren_args closes, so set/consume pairs never interleave. */
+    struct {
+        YYLTYPE opening;
+        YYLTYPE closing;
+        unsigned int set: 1;
+    } yparens;
     int tokidx;
     int toksiz;
     int heredoc_end;
@@ -1364,6 +1374,8 @@ static rb_node_rational_t * rb_node_rational_new(struct parser_params *p, char* 
 static rb_node_imaginary_t * rb_node_imaginary_new(struct parser_params *p, char* val, int base, int seen_point, enum rb_numeric_type, const YYLTYPE *loc);
 static rb_node_str_t *rb_node_str_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
 static NODE *string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
+static void pm_yparens_set(struct parser_params *p, const YYLTYPE *opening, const YYLTYPE *closing);
+static NODE *pm_yfcall_args(struct parser_params *p, NODE *node, NODE *args, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
 static rb_node_xstr_t *rb_node_xstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -2946,9 +2958,7 @@ fcall		: operation
 
 command		: fcall command_args       %prec tLOWEST
                     {
-                        YSTUB("grammar"); /* PORTME: $1->nd_args = $2; */
-                        YSTUB("grammar"); /* PORTME: nd_set_last_loc($1, @2.end_pos); */
-                        $$ = (NODE *)$1;
+                        $$ = pm_yfcall_args(p, (NODE *)$1, $2, &@$);
                     }
                 | fcall command_args cmd_brace_block
                     {
@@ -3438,6 +3448,7 @@ arg_rhs 	: arg   %prec tOP_ASGN
 paren_args	: '(' opt_call_args rparen
                     {
                         $$ = $2;
+                        pm_yparens_set(p, &@1, &@3);
                     }
                 | '(' args ',' args_forward rparen
                     {
@@ -4372,9 +4383,7 @@ block_call	: command do_block
 
 method_call	: fcall paren_args
                     {
-                        YSTUB("grammar"); /* PORTME: $1->nd_args = $2; */
-                        $$ = (NODE *)$1;
-                        YSTUB("grammar"); /* PORTME: nd_set_last_loc($1, @2.end_pos); */
+                        $$ = pm_yfcall_args(p, (NODE *)$1, $2, &@$);
                     }
                 | primary_value call_op operation2 opt_paren_args
                     {
@@ -9586,8 +9595,25 @@ string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *openin
     return node;
 }
 
-/* The constant pool id for an ID's name, in the fork's usual pools. */
-#define YID2CONST(id) pm_yid_to_constant(&p->pm->metadata_arena, &p->pm->constant_pool, (id))
+/* The constant pool id for an ID's name, in the fork's usual pools. Static
+ * IDs (id.h) never went through pm_yid_intern, so their spellings are
+ * supplied here as node construction comes to need them. */
+static pm_constant_id_t
+pm_yid2const(struct parser_params *p, ID id)
+{
+    const char *known = NULL;
+    switch (id) {
+      case idCall: known = "call"; break;
+      default: break;
+    }
+
+    if (known != NULL) {
+        return pm_constant_pool_insert_constant(&p->pm->metadata_arena, &p->pm->constant_pool, (const uint8_t *) known, strlen(known));
+    }
+
+    return pm_yid_to_constant(&p->pm->metadata_arena, &p->pm->constant_pool, id);
+}
+#define YID2CONST(id) pm_yid2const(p, (id))
 
 /*
  * The depth of a block-local variable: how many enclosing block scopes up its
@@ -9605,6 +9631,124 @@ pm_ydvar_depth(struct parser_params *p, ID id)
     }
 
     return 0;
+}
+
+/* A node's own span as a YYLTYPE, for the CRuby idiom of locating a new node
+ * at an existing one (&node->nd_loc upstream). */
+static inline YYLTYPE
+pm_yloc_of(const NODE *node)
+{
+    return (YYLTYPE) { node->location.start, node->location.start + node->location.length };
+}
+
+/*
+ * Argument lists. CRuby carries call arguments as the same NODE_LIST it uses
+ * for array literals; prism separates ArgumentsNode from ArrayNode. The fork
+ * builds lists as bare ArrayNodes (no brackets) and converts at the call
+ * constructors, which are the points that know the list is arguments.
+ */
+static pm_arguments_node_t *
+pm_yargs_from_list(struct parser_params *p, NODE *list)
+{
+    if (list == NULL || NODE_EMPTY_ARGS_P(list)) return NULL;
+
+    if (PM_NODE_TYPE_P(list, PM_ARRAY_NODE)) {
+        pm_array_node_t *array = (pm_array_node_t *) list;
+        return pm_arguments_node_new(p->pm->arena, ++p->pm->node_id, 0, array->base.location, array->elements);
+    }
+
+    YSTUB("pm_yargs_from_list");
+    return NULL;
+}
+
+/* Record the parentheses of a paren_args reduction for the call about to
+ * consume them. */
+static void
+pm_yparens_set(struct parser_params *p, const YYLTYPE *opening, const YYLTYPE *closing)
+{
+    p->yparens.opening = *opening;
+    p->yparens.closing = *closing;
+    p->yparens.set = 1;
+}
+
+/* Attach the pending parentheses, if any, to the given call. */
+static void
+pm_yparens_take(struct parser_params *p, pm_call_node_t *call)
+{
+    if (!p->yparens.set) return;
+    call->opening_loc = pm_yloc(&p->yparens.opening);
+    call->closing_loc = pm_yloc(&p->yparens.closing);
+    p->yparens.set = 0;
+}
+
+/*
+ * The location of the call operator (`.`, `&.`, `::`) between a receiver and
+ * its message. The grammar does not pass it down (CRuby's nodes never store
+ * it), but it is recoverable: it is the only token between the two, so a
+ * forward scan that skips whitespace and comments finds it exactly.
+ */
+static pm_location_t
+pm_ycall_operator_scan(struct parser_params *p, uint32_t from, uint32_t upto)
+{
+    const uint8_t *source = p->pm->start;
+    uint32_t scan = from;
+
+    while (scan < upto) {
+        uint8_t c = source[scan];
+        if (c == '#') {
+            while (scan < upto && source[scan] != '\n') scan++;
+        }
+        else if (c == '.' && scan + 1 < upto && source[scan + 1] == '.') {
+            /* not reachable for call operators; guards against ranges */
+            scan += 2;
+        }
+        else if (c == '.') {
+            return (pm_location_t) { scan, 1 };
+        }
+        else if (c == '&' && scan + 1 < upto && source[scan + 1] == '.') {
+            return (pm_location_t) { scan, 2 };
+        }
+        else if (c == ':' && scan + 1 < upto && source[scan + 1] == ':') {
+            return (pm_location_t) { scan, 2 };
+        }
+        else {
+            scan++;
+        }
+    }
+
+    return (pm_location_t) { 0 };
+}
+
+/*
+ * Attach arguments (and any pending parentheses) to a parenless-constructed
+ * call: the fcall and command forms build the CallNode from the method name
+ * alone and the arguments arrive in a later part of the rule.
+ */
+static NODE *
+pm_yfcall_args(struct parser_params *p, NODE *node, NODE *args, const YYLTYPE *loc)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_CALL_NODE)) {
+        YSTUB("pm_yfcall_args");
+        return node;
+    }
+
+    pm_call_node_t *call = (pm_call_node_t *) node;
+    if (NODE_EMPTY_ARGS_P(args)) args = 0;
+    call->arguments = pm_yargs_from_list(p, args);
+    pm_yparens_take(p, call);
+    call->base.location = pm_yloc(loc);
+    return node;
+}
+
+/* Set the message location on a call once the operator/message token is at
+ * hand; the constructors do not receive it. */
+static NODE *
+pm_ycall_message(NODE *node, const YYLTYPE *op_loc)
+{
+    if (node != NULL && PM_NODE_TYPE_P(node, PM_CALL_NODE)) {
+        ((pm_call_node_t *) node)->message_loc = pm_yloc(op_loc);
+    }
+    return node;
 }
 
 /* Mirror of prism.c's pm_integer_arena_move (static there): a parsed integer
@@ -9949,8 +10093,11 @@ rb_node_match3_new(struct parser_params *p, NODE *nd_recv, NODE *nd_value, const
 static rb_node_list_t *
 rb_node_list_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_list_new");
-    return NULL;
+    pm_node_list_t elements = { 0 };
+    if (nd_head != NULL) pm_node_list_append(p->pm->arena, &elements, nd_head);
+    return (rb_node_list_t *) pm_array_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), elements,
+        (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static rb_node_list_t *
@@ -10216,29 +10363,42 @@ rb_node_regx_new(struct parser_params *p, rb_parser_string_t *string, int option
 static rb_node_call_t *
 rb_node_call_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd_args, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_call_new");
-    return NULL;
+    return (rb_node_call_t *) pm_call_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        nd_recv, (pm_location_t) { 0 }, YID2CONST(nd_mid), (pm_location_t) { 0 },
+        (pm_location_t) { 0 }, pm_yargs_from_list(p, nd_args),
+        (pm_location_t) { 0 }, (pm_location_t) { 0 }, NULL);
 }
 
 static rb_node_opcall_t *
 rb_node_opcall_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd_args, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_opcall_new");
-    return NULL;
+    return (rb_node_opcall_t *) pm_call_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        nd_recv, (pm_location_t) { 0 }, YID2CONST(nd_mid), (pm_location_t) { 0 },
+        (pm_location_t) { 0 }, pm_yargs_from_list(p, nd_args),
+        (pm_location_t) { 0 }, (pm_location_t) { 0 }, NULL);
 }
 
 static rb_node_fcall_t *
 rb_node_fcall_new(struct parser_params *p, ID nd_mid, NODE *nd_args, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_fcall_new");
-    return NULL;
+    pm_location_t location = pm_yloc(loc);
+    return (rb_node_fcall_t *) pm_call_node_new(
+        p->pm->arena, ++p->pm->node_id, PM_CALL_NODE_FLAGS_IGNORE_VISIBILITY,
+        location, NULL, (pm_location_t) { 0 }, YID2CONST(nd_mid), location,
+        (pm_location_t) { 0 }, pm_yargs_from_list(p, nd_args),
+        (pm_location_t) { 0 }, (pm_location_t) { 0 }, NULL);
 }
 
 static rb_node_qcall_t *
 rb_node_qcall_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd_args, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_qcall_new");
-    return NULL;
+    return (rb_node_qcall_t *) pm_call_node_new(
+        p->pm->arena, ++p->pm->node_id, PM_CALL_NODE_FLAGS_SAFE_NAVIGATION, pm_yloc(loc),
+        nd_recv, (pm_location_t) { 0 }, YID2CONST(nd_mid), (pm_location_t) { 0 },
+        (pm_location_t) { 0 }, pm_yargs_from_list(p, nd_args),
+        (pm_location_t) { 0 }, (pm_location_t) { 0 }, NULL);
 }
 
 static rb_node_vcall_t *
@@ -10536,8 +10696,24 @@ block_append(struct parser_params *p, NODE *head, NODE *tail)
 static NODE*
 list_append(struct parser_params *p, NODE *list, NODE *item)
 {
-    YSTUB("list_append");
-    return NULL;
+    if (list == NULL) {
+        YYLTYPE item_loc = item ? pm_yloc_of(item) : NULL_LOC;
+        return NEW_LIST(item, &item_loc);
+    }
+    if (!PM_NODE_TYPE_P(list, PM_ARRAY_NODE)) {
+        YSTUB("list_append");
+        return list;
+    }
+
+    pm_array_node_t *array = (pm_array_node_t *) list;
+    pm_node_list_append(p->pm->arena, &array->elements, item);
+    if (item != NULL) {
+        uint32_t end = item->location.start + item->location.length;
+        if (end > array->base.location.start + array->base.location.length) {
+            array->base.location.length = end - array->base.location.start;
+        }
+    }
+    return list;
 }
 
 /* concat two lists */
@@ -10619,29 +10795,63 @@ static NODE *
 call_bin_op(struct parser_params *p, NODE *recv, ID id, NODE *arg1,
                 const YYLTYPE *op_loc, const YYLTYPE *loc)
 {
-    YSTUB("call_bin_op");
-    return NULL;
+    NODE *expr;
+    value_expr(p, recv);
+    value_expr(p, arg1);
+    {
+        YYLTYPE arg_loc = pm_yloc_of(arg1);
+        expr = NEW_OPCALL(recv, id, NEW_LIST(arg1, &arg_loc), loc);
+    }
+    pm_ycall_message(expr, op_loc);
+    return expr;
 }
 
 static NODE *
 call_uni_op(struct parser_params *p, NODE *recv, ID id, const YYLTYPE *op_loc, const YYLTYPE *loc)
 {
-    YSTUB("call_uni_op");
-    return NULL;
+    NODE *opcall;
+    value_expr(p, recv);
+    opcall = NEW_OPCALL(recv, id, 0, loc);
+    pm_ycall_message(opcall, op_loc);
+    return opcall;
 }
 
 static NODE *
 new_qcall(struct parser_params* p, ID atype, NODE *recv, ID mid, NODE *args, const YYLTYPE *op_loc, const YYLTYPE *loc)
 {
-    YSTUB("new_qcall");
-    return NULL;
+    NODE *qcall = NEW_QCALL(atype, recv, mid, args, loc);
+    if (qcall != NULL && PM_NODE_TYPE_P(qcall, PM_CALL_NODE)) {
+        pm_call_node_t *call = (pm_call_node_t *) qcall;
+
+        /* op_loc is the message token, except in the `a.(args)` forms, where
+         * the rules pass the call operator itself; the operator's first byte
+         * tells the two apart, and only a real message is recorded. */
+        uint8_t first = p->pm->start[op_loc->beg];
+        if (first == '.' || first == '&' || first == ':') {
+            call->call_operator_loc = pm_yloc(op_loc);
+        }
+        else {
+            call->message_loc = pm_yloc(op_loc);
+            if (recv != NULL) {
+                call->call_operator_loc = pm_ycall_operator_scan(p, recv->location.start + recv->location.length, op_loc->beg);
+            }
+        }
+
+        pm_yparens_take(p, call);
+    }
+    return qcall;
 }
 
 static NODE*
 new_command_qcall(struct parser_params* p, ID atype, NODE *recv, ID mid, NODE *args, NODE *block, const YYLTYPE *op_loc, const YYLTYPE *loc)
 {
-    YSTUB("new_command_qcall");
-    return NULL;
+    NODE *ret;
+    if (block) block_dup_check(p, args, block);
+    ret = new_qcall(p, atype, recv, mid, args, op_loc, loc);
+    if (block) {
+        YSTUB("new_command_qcall");
+    }
+    return ret;
 }
 
 static rb_locations_lambda_body_t*
@@ -11072,8 +11282,11 @@ arg_concat(struct parser_params *p, NODE *node1, NODE *node2, const YYLTYPE *loc
 static NODE *
 last_arg_append(struct parser_params *p, NODE *args, NODE *last_arg, const YYLTYPE *loc)
 {
-    YSTUB("last_arg_append");
-    return NULL;
+    NODE *n1;
+    if ((n1 = splat_array(args)) != 0) {
+        return list_append(p, n1, last_arg);
+    }
+    return arg_append(p, args, last_arg, loc);
 }
 
 static NODE *
@@ -11086,6 +11299,7 @@ rest_arg_append(struct parser_params *p, NODE *args, NODE *rest_arg, const YYLTY
 static NODE *
 splat_array(NODE* node)
 {
+    if (node != NULL && PM_NODE_TYPE_P(node, PM_ARRAY_NODE)) return node;
     return NULL;
 }
 
@@ -11233,15 +11447,18 @@ cond0(struct parser_params *p, NODE *node, enum cond_type type, const YYLTYPE *l
 static NODE*
 cond(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 {
-    YSTUB("cond");
-    return NULL;
+    if (node == 0) return 0;
+    /* PORTME: as method_cond. */
+    return node;
 }
 
 static NODE*
 method_cond(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 {
-    YSTUB("method_cond");
-    return NULL;
+    if (node == 0) return 0;
+    /* PORTME: cond0's regexp/range/flip-flop condition rewrites arrive with
+     * those nodes; every other expression passes through unchanged. */
+    return node;
 }
 
 static NODE*
@@ -11294,8 +11511,16 @@ ret_args(struct parser_params *p, NODE *node)
 static NODE*
 negate_lit(struct parser_params *p, NODE* node, const YYLTYPE *loc)
 {
-    YSTUB("negate_lit");
-    return NULL;
+    switch (PM_NODE_TYPE(node)) {
+      case PM_INTEGER_NODE:
+        ((pm_integer_node_t *) node)->value.negative = true;
+        break;
+      default:
+        YSTUB("negate_lit");
+        break;
+    }
+    node->location = pm_yloc(loc);
+    return node;
 }
 
 static NODE *
