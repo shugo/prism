@@ -3365,7 +3365,10 @@ arg		: asgn(arg_rhs)
                     }
                 | tUMINUS_NUM simple_numeric tPOW arg
                     {
-                        $$ = call_uni_op(p, call_bin_op(p, $2, idPow, $4, &@2, &@$), idUMinus, &@1, &@$);
+                        /* the power binds tighter: -(2 ** n), so the inner
+                         * call spans from the numeric, not the minus */
+                        YYLTYPE pow_loc = { @2.beg, @4.end };
+                        $$ = call_uni_op(p, call_bin_op(p, $2, idPow, $4, &@3, &pow_loc), idUMinus, &@1, &@$);
                     }
                 | tUPLUS arg
                     {
@@ -4378,7 +4381,6 @@ lambda		: tLAMBDA[lpar]
                             $$ = NEW_LAMBDA($args, $body->node, &loc, &@lpar, &$body->opening_loc, &$body->closing_loc);
                             nd_set_line(RNODE_LAMBDA($$)->nd_body, @body.end_pos.lineno);
                             nd_set_line($$, @args.end_pos.lineno);
-                            YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @lpar.beg_pos); */
                             xfree($body);
                         }
                         numparam_pop(p, $numparam);
@@ -4389,7 +4391,7 @@ lambda		: tLAMBDA[lpar]
 f_larglist	: '(' f_largs[args] opt_bv_decl ')'
                     {
                         p->ctxt.in_argdef = 0;
-                        $$ = $args;
+                        $$ = (rb_node_args_t *) pm_yblock_params(p, (NODE *) $args, NULL /* PORTME: $opt_bv_decl */, &@1, &@4);
                         p->max_numparam = ORDINAL_PARAM;
                     }
                 | f_largs[args]
@@ -4397,7 +4399,7 @@ f_larglist	: '(' f_largs[args] opt_bv_decl ')'
                         p->ctxt.in_argdef = 0;
                         if (0) /* PORTME: args_info_empty_p on the ported parameter builder */
                             p->max_numparam = ORDINAL_PARAM;
-                        $$ = $args;
+                        $$ = (rb_node_args_t *) pm_yblock_params(p, (NODE *) $args, NULL, NULL, NULL);
                     }
                 ;
 
@@ -9850,6 +9852,10 @@ pm_yid2str(struct parser_params *p, ID id)
     return pm_ystring_new((const char *) constant->start, (long) constant->length, p->enc);
 }
 
+/* A class/module/singleton-class body: rescue/ensure clauses hang directly
+ * off the definition, spanning it entirely with the end keyword stamped. */
+static pm_node_t *pm_yclass_body(struct parser_params *p, NODE *body, const YYLTYPE *loc, const YYLTYPE *end_keyword_loc);
+
 /* Wrap a body (or NULL) for a node that wants an optional StatementsNode:
  * unlike pm_ystatements_ensure, an absent body stays absent. */
 static pm_statements_node_t *
@@ -10020,16 +10026,43 @@ pm_yistr(struct parser_params *p, NODE *part)
         (pm_location_t) { 0 }, parts, (pm_location_t) { 0 });
 }
 
-/* The |params| of a block. */
+static pm_node_t *
+pm_yclass_body(struct parser_params *p, NODE *body, const YYLTYPE *loc, const YYLTYPE *end_keyword_loc)
+{
+    if (body != NULL && PM_NODE_TYPE_P(body, PM_BEGIN_NODE)) {
+        pm_ybegin_stamp_end(body, pm_yloc(end_keyword_loc));
+        body->location = pm_yloc(loc);
+        return body;
+    }
+    return (pm_node_t *) pm_ystatements_opt(p, body);
+}
+
+/* The |params| of a block, or a lambda's -> (params). A NULL opening means
+ * the undelimited lambda form ->a { }, whose span is the parameters' own. */
 static NODE *
 pm_yblock_params(struct parser_params *p, NODE *params, NODE *block_locals, const YYLTYPE *opening, const YYLTYPE *closing)
 {
     (void) block_locals; /* PORTME: `; x` block-local declarations */
-    pm_location_t location = { opening->beg, closing->end - opening->beg };
+
+    pm_parameters_node_t *parameters =
+        (params != NULL && PM_NODE_TYPE_P(params, PM_PARAMETERS_NODE)) ? (pm_parameters_node_t *) params : NULL;
+
+    pm_location_t location;
+    pm_location_t opening_loc = { 0 };
+    pm_location_t closing_loc = { 0 };
+    if (opening != NULL) {
+        location = (pm_location_t) { opening->beg, closing->end - opening->beg };
+        opening_loc = pm_yloc(opening);
+        closing_loc = pm_yloc(closing);
+    }
+    else {
+        if (parameters == NULL) return params;
+        location = parameters->base.location;
+    }
+
     return (NODE *) pm_block_parameters_node_new(
         p->pm->arena, ++p->pm->node_id, 0, location,
-        (params != NULL && PM_NODE_TYPE_P(params, PM_PARAMETERS_NODE)) ? (pm_parameters_node_t *) params : NULL,
-        (pm_node_list_t) { 0 }, pm_yloc(opening), pm_yloc(closing));
+        parameters, (pm_node_list_t) { 0 }, opening_loc, closing_loc);
 }
 
 /* A modifier rescue: expr rescue fallback. */
@@ -10619,15 +10652,18 @@ rb_node_class_new(struct parser_params *p, NODE *nd_cpath, NODE *nd_body, NODE *
     return (rb_node_class_t *) pm_class_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), locals,
         pm_yloc(class_keyword_loc), nd_cpath, pm_yloc(inheritance_operator_loc),
-        nd_super, (pm_node_t *) pm_ystatements_opt(p, nd_body),
+        nd_super, pm_yclass_body(p, nd_body, loc, end_keyword_loc),
         pm_yloc(end_keyword_loc), pm_yconstant_path_name(nd_cpath));
 }
 
 static rb_node_sclass_t *
 rb_node_sclass_new(struct parser_params *p, NODE *nd_recv, NODE *nd_body, const YYLTYPE *loc, const YYLTYPE *class_keyword_loc, const YYLTYPE *operator_loc, const YYLTYPE *end_keyword_loc)
 {
-    YSTUB("rb_node_sclass_new");
-    return NULL;
+    pm_constant_id_list_t locals = pm_ylocals(p);
+    return (rb_node_sclass_t *) pm_singleton_class_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), locals,
+        pm_yloc(class_keyword_loc), pm_yloc(operator_loc), nd_recv,
+        pm_yclass_body(p, nd_body, loc, end_keyword_loc), pm_yloc(end_keyword_loc));
 }
 
 static rb_node_module_t *
@@ -10637,7 +10673,7 @@ rb_node_module_new(struct parser_params *p, NODE *nd_cpath, NODE *nd_body, const
     return (rb_node_module_t *) pm_module_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), locals,
         pm_yloc(module_keyword_loc), nd_cpath,
-        (pm_node_t *) pm_ystatements_opt(p, nd_body),
+        pm_yclass_body(p, nd_body, loc, end_keyword_loc),
         pm_yloc(end_keyword_loc), pm_yconstant_path_name(nd_cpath));
 }
 
@@ -10662,8 +10698,23 @@ rb_node_iter_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_body
 static rb_node_lambda_t *
 rb_node_lambda_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_body, const YYLTYPE *loc, const YYLTYPE *operator_loc, const YYLTYPE *opening_loc, const YYLTYPE *closing_loc)
 {
-    YSTUB("rb_node_lambda_new");
-    return NULL;
+    pm_node_t *body;
+    if (nd_body != NULL && PM_NODE_TYPE_P(nd_body, PM_BEGIN_NODE)) {
+        /* rescue/ensure clauses hang directly off the lambda, spanning the
+         * whole braced body with the end keyword stamped, as in blocks */
+        body = nd_body;
+        pm_location_t closing = pm_yloc(closing_loc);
+        pm_ybegin_stamp_end(body, closing);
+        body->location = (pm_location_t) { opening_loc->beg, closing_loc->end - opening_loc->beg };
+    }
+    else {
+        body = (pm_node_t *) pm_ystatements_opt(p, nd_body);
+    }
+
+    return (rb_node_lambda_t *) pm_lambda_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_ylocals(p), pm_yloc(operator_loc), pm_yloc(opening_loc), pm_yloc(closing_loc),
+        (pm_node_t *) nd_args, body);
 }
 
 static rb_node_case_t *
@@ -11056,22 +11107,98 @@ rb_node_integer_new(struct parser_params *p, char* val, int base, const YYLTYPE 
 static rb_node_float_t *
 rb_node_float_new(struct parser_params *p, char* val, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_float_new");
-    return NULL;
+    /* the lexer's token buffer already has the underscores stripped */
+    double value = strtod(val, NULL);
+    xfree(val);
+    return (rb_node_float_t *) pm_float_node_new(
+        p->pm->arena, ++p->pm->node_id, PM_NODE_FLAG_STATIC_LITERAL, pm_yloc(loc), value);
 }
 
 static rb_node_rational_t *
 rb_node_rational_new(struct parser_params *p, char* val, int base, int seen_point, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_rational_new");
-    return NULL;
+    xfree(val);
+
+    pm_node_flags_t flags = PM_NODE_FLAG_STATIC_LITERAL;
+    pm_integer_base_t integer_base;
+    switch (base) {
+      case 2: flags |= PM_INTEGER_BASE_FLAGS_BINARY; integer_base = PM_INTEGER_BASE_BINARY; break;
+      case 8: flags |= PM_INTEGER_BASE_FLAGS_OCTAL; integer_base = PM_INTEGER_BASE_OCTAL; break;
+      case 16: flags |= PM_INTEGER_BASE_FLAGS_HEXADECIMAL; integer_base = PM_INTEGER_BASE_HEXADECIMAL; break;
+      default: flags |= PM_INTEGER_BASE_FLAGS_DECIMAL; integer_base = PM_INTEGER_BASE_DECIMAL; break;
+    }
+
+    pm_rational_node_t *node = pm_rational_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+        ((pm_integer_t) { 0 }), ((pm_integer_t) { 0 }));
+
+    /* the token in the source is <number>r */
+    const uint8_t *start = p->pm->start + loc->beg;
+    const uint8_t *end = p->pm->start + loc->end - 1;
+
+    if (!seen_point) {
+        pm_integer_parse(&node->numerator, integer_base, start, end);
+        node->denominator.value = 1;
+    }
+    else {
+        /* mirrors pm_float_node_rational_create in src/prism.c */
+        while (start < end && *start == '0') start++;
+        while (end > start && end[-1] == '0') end--;
+
+        size_t length = (size_t) (end - start);
+        if (length == 1) {
+            node->denominator.value = 1;
+            return (rb_node_rational_t *) node;
+        }
+
+        const uint8_t *point = memchr(start, '.', length);
+
+        uint8_t *digits = xmalloc(length);
+        if (digits == NULL) abort();
+
+        memcpy(digits, start, (size_t) (point - start));
+        memcpy(digits + (point - start), point + 1, (size_t) (end - point - 1));
+        pm_integer_parse(&node->numerator, PM_INTEGER_BASE_DEFAULT, digits, digits + length - 1);
+
+        size_t fract_length = 0;
+        for (const uint8_t *fract = point; fract < end; ++fract) {
+            if (*fract != '_') ++fract_length;
+        }
+        digits[0] = '1';
+        if (fract_length > 1) memset(digits + 1, '0', fract_length - 1);
+        pm_integer_parse(&node->denominator, PM_INTEGER_BASE_DEFAULT, digits, digits + fract_length);
+        xfree(digits);
+
+        pm_integers_reduce(&node->numerator, &node->denominator);
+    }
+
+    pm_yinteger_arena_move(p->pm->arena, &node->numerator);
+    pm_yinteger_arena_move(p->pm->arena, &node->denominator);
+    return (rb_node_rational_t *) node;
 }
 
 static rb_node_imaginary_t *
 rb_node_imaginary_new(struct parser_params *p, char* val, int base, int seen_point, enum rb_numeric_type numeric_type, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_imaginary_new");
-    return NULL;
+    /* the numeric child ends before the trailing i; it takes over val */
+    YYLTYPE numeric_loc = *loc;
+    numeric_loc.end -= 1;
+
+    NODE *numeric;
+    switch (numeric_type) {
+      case integer_literal:
+        numeric = (NODE *) rb_node_integer_new(p, val, base, &numeric_loc);
+        break;
+      case float_literal:
+        numeric = (NODE *) rb_node_float_new(p, val, &numeric_loc);
+        break;
+      default:
+        numeric = (NODE *) rb_node_rational_new(p, val, base, seen_point, &numeric_loc);
+        break;
+    }
+
+    return (rb_node_imaginary_t *) pm_imaginary_node_new(
+        p->pm->arena, ++p->pm->node_id, PM_NODE_FLAG_STATIC_LITERAL, pm_yloc(loc), numeric);
 }
 
 static rb_node_str_t *
@@ -12562,6 +12689,19 @@ negate_lit(struct parser_params *p, NODE* node, const YYLTYPE *loc)
       case PM_INTEGER_NODE:
         ((pm_integer_node_t *) node)->value.negative = true;
         break;
+      case PM_FLOAT_NODE:
+        ((pm_float_node_t *) node)->value = -((pm_float_node_t *) node)->value;
+        break;
+      case PM_RATIONAL_NODE:
+        ((pm_rational_node_t *) node)->numerator.negative = true;
+        break;
+      case PM_IMAGINARY_NODE: {
+        /* the sign lives on the numeric child; both spans grow to cover it */
+        YYLTYPE numeric_loc = *loc;
+        numeric_loc.end -= 1;
+        negate_lit(p, ((pm_imaginary_node_t *) node)->numeric, &numeric_loc);
+        break;
+      }
       default:
         YSTUB("negate_lit");
         break;
