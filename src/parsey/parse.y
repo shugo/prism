@@ -3007,8 +3007,7 @@ command_rhs	: command_call_value   %prec tOP_ASGN
                 | command_call_value modifier_rescue after_rescue stmt
                     {
                         p->ctxt.in_rescue = $3.in_rescue;
-                        YYLTYPE loc = code_loc_gen(&@2, &@4);
-                        $$ = NEW_RESCUE($1, NEW_RESBODY(0, 0, remove_begin($4), 0, &loc), 0, &@$);
+                        $$ = pm_yrescue_modifier(p, $1, remove_begin($4), &@2, &@$);
                     }
                 | command_asgn
                 ;
@@ -8574,6 +8573,13 @@ parse_qmark(struct parser_params *p, int space_seen)
     tokfix(p);
     lit = STR_NEW3(tok(p), toklen(p), enc, 0);
     set_yylval_str(lit);
+    /* fork: the leading ? is the literal's opening, not content */
+    if (yylval.node != NULL && PM_NODE_TYPE_P(yylval.node, PM_STRING_NODE)) {
+        pm_string_node_t *chr = (pm_string_node_t *) yylval.node;
+        chr->opening_loc = (pm_location_t) { chr->base.location.start, 1 };
+        chr->content_loc.start += 1;
+        chr->content_loc.length -= 1;
+    }
     SET_LEX_STATE(EXPR_END);
     return tCHAR;
 }
@@ -11376,6 +11382,13 @@ rb_node_when_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, NODE *nd
         pm_node_list_append(p->pm->arena, &conditions, nd_head);
     }
 
+    /* string conditions deduplicate at compile time, so they freeze */
+    for (size_t i = 0; i < conditions.size; i++) {
+        if (PM_NODE_TYPE_P(conditions.nodes[i], PM_STRING_NODE)) {
+            conditions.nodes[i]->flags |= PM_STRING_FLAGS_FROZEN | PM_NODE_FLAG_STATIC_LITERAL;
+        }
+    }
+
     pm_location_t keyword = pm_yloc(keyword_loc);
     pm_location_t then_keyword = pm_ythen_loc(p, then_keyword_loc);
 
@@ -13861,7 +13874,18 @@ new_args(struct parser_params *p, rb_node_args_aux_t *pre_args, rb_node_opt_arg_
         if (PM_NODE_TYPE_P((NODE *) post_args, PM_ARRAY_NODE)) posts = ((pm_array_node_t *) post_args)->elements;
         else { YSTUB("new_args"); }
     }
-    if (rest_arg != 0) {
+    if (rest_arg == NODE_SPECIAL_EXCESSIVE_COMMA) {
+        /* |a, |: the comma after the last required is an implicit rest */
+        uint32_t scan = loc->beg;
+        if (requireds.size > 0) {
+            pm_node_t *last = requireds.nodes[requireds.size - 1];
+            scan = last->location.start + last->location.length;
+        }
+        while (scan < loc->end && p->pm->start[scan] != ',') scan++;
+        rest = (pm_node_t *) pm_implicit_rest_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, (pm_location_t) { scan, 1 });
+    }
+    else if (rest_arg != 0) {
         rest = p->yrest_param;
         p->yrest_param = NULL;
     }
