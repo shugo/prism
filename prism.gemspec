@@ -217,6 +217,8 @@ Gem::Specification.new do |spec|
     "src/parsey/parse.c",
     "src/parsey/parse.h",
     "src/parsey/parse.y",
+    "src/parsey/yid.c",
+    "src/parsey/yid.h",
     "src/prettyprint.c",
     "src/prism.c",
     "src/regexp.c",

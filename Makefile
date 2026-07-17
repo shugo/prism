@@ -115,6 +115,21 @@ all-no-debug: all
 minimal: CFLAGS := $(CFLAGS) -DPRISM_BUILD_MINIMAL
 minimal: all
 
+# The parse.y backend's supporting code sits between the forked grammar and
+# prism's internals, where the Ruby test suite cannot reach it, so it is tested
+# from C directly.
+PARSEY_TESTS := $(wildcard test/prism/parsey/*_test.c)
+
+test-parsey: $(PARSEY_TESTS:test/prism/parsey/%.c=build/test-parsey/%)
+	$(Q) for test in $^; do $(ECHO) "running $$test"; ./$$test || exit 1; done
+
+build/test-parsey/%: test/prism/parsey/%.c Makefile $(STATIC_OBJECTS) $(HEADERS)
+	$(ECHO) "compiling $@"
+	$(Q) $(MAKEDIRS) $(@D)
+	$(Q) $(CC) $(DEBUG_FLAGS) $(CPPFLAGS) -Isrc/parsey $(CFLAGS) -o $@ $< $(STATIC_OBJECTS)
+
+.PHONY: test-parsey
+
 run: Makefile $(STATIC_OBJECTS) $(HEADERS) test.c
 	$(ECHO) "compiling test.c"
 	$(Q) $(CC) $(CPPFLAGS) $(CFLAGS) $(STATIC_OBJECTS) test.c
