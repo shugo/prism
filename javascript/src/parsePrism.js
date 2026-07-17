@@ -163,6 +163,10 @@ function dumpOptions(options) {
   template.push("C");
   values.push(0);
 
+  // The backend option. This binding always uses the default backend.
+  template.push("C");
+  values.push(0);
+
   template.push("L");
   if (options.scopes) {
     const scopes = options.scopes;

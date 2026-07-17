@@ -20,6 +20,7 @@
 #include "prism/internal/node.h"
 #include "prism/internal/options.h"
 #include "prism/internal/parser.h"
+#include "prism/internal/parsey.h"
 #include "prism/internal/regexp.h"
 #include "prism/internal/serialize.h"
 #include "prism/internal/source.h"
@@ -22757,6 +22758,23 @@ pm_parser_init_shebang(pm_parser_t *parser, const pm_options_t *options, const c
 }
 
 /**
+ * Determine which parser implementation to use when a parse did not request one
+ * explicitly. The PRISM_PARSER_BACKEND environment variable selects it; an
+ * unset or unrecognized value leaves the hand-written parser in place, since
+ * silently refusing to parse would be a worse failure than ignoring a typo.
+ */
+static pm_options_backend_t
+pm_parser_backend_default(void) {
+    const char *backend = getenv("PRISM_PARSER_BACKEND");
+    if (backend == NULL) return PM_OPTIONS_BACKEND_HANDWRITTEN;
+
+    pm_options_t options = { 0 };
+    if (pm_options_backend_set(&options, backend, strlen(backend))) return options.backend;
+
+    return PM_OPTIONS_BACKEND_HANDWRITTEN;
+}
+
+/**
  * Initialize a parser with the given start and end pointers.
  */
 void
@@ -22816,6 +22834,7 @@ pm_parser_init(pm_arena_t *arena, pm_parser_t *parser, const uint8_t *source, si
         .current_block_exits = NULL,
         .semantic_token_seen = false,
         .frozen_string_literal = PM_OPTIONS_FROZEN_STRING_LITERAL_UNSET,
+        .backend = PM_OPTIONS_BACKEND_HANDWRITTEN,
         .warn_mismatched_indentation = true
     };
 
@@ -22868,6 +22887,9 @@ pm_parser_init(pm_arena_t *arena, pm_parser_t *parser, const uint8_t *source, si
         // version option
         parser->version = options->version;
 
+        // backend option
+        parser->backend = options->backend;
+
         // partial_script
         parser->partial_script = options->partial_script;
 
@@ -22900,6 +22922,13 @@ pm_parser_init(pm_arena_t *arena, pm_parser_t *parser, const uint8_t *source, si
     // a version was given and parse as the latest version otherwise.
     if (parser->version == PM_OPTIONS_VERSION_UNSET) {
         parser->version = PM_OPTIONS_VERSION_LATEST;
+    }
+
+    // Similarly, if a backend was not requested for this parse, fall back to the
+    // process-wide default. Resolving this here rather than at each entry point
+    // means every caller honors it: the C API, both Ruby backends, and the CLI.
+    if (parser->backend == PM_OPTIONS_BACKEND_UNSET) {
+        parser->backend = pm_parser_backend_default();
     }
 
     pm_accepts_block_stack_push(parser, true);
@@ -23229,6 +23258,8 @@ pm_parse_continuable(pm_parser_t *parser) {
  */
 pm_node_t *
 pm_parse(pm_parser_t *parser) {
+    if (parser->backend == PM_OPTIONS_BACKEND_PARSE_Y) return pm_yparse(parser);
+
     pm_node_t *node = parse_program(parser);
     pm_parse_continuable(parser);
     return node;

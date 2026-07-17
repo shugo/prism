@@ -455,6 +455,16 @@ module Prism # :nodoc:
       end
     end
 
+    # Return the value that should be dumped for the backend option.
+    def dump_options_backend(backend)
+      case backend
+      when nil then 0 # Handled in pm_parser_init
+      when :prism then 1
+      when :parse_y then 2
+      else raise ArgumentError, "invalid backend: #{backend}"
+      end
+    end
+
     # Return the value that should be dumped for the version option.
     def dump_options_version(version)
       case version
@@ -535,6 +545,9 @@ module Prism # :nodoc:
 
       template << "C"
       values << (options.fetch(:freeze, false) ? 1 : 0)
+
+      template << "C"
+      values << dump_options_backend(options[:backend])
 
       template << "L"
       if (scopes = options[:scopes])

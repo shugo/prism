@@ -1,0 +1,59 @@
+# frozen_string_literal: true
+
+# The parse.y backend's parser is generated from src/parsey/parse.y by lrama,
+# the parser generator that CRuby itself uses. The generated src/parsey/parse.c
+# is checked in, following the same policy CRuby uses for its releases: building
+# prism from a checkout or an installed gem needs a C compiler but not lrama.
+# Only editing the grammar does.
+
+PARSEY_GRAMMAR = "src/parsey/parse.y"
+PARSEY_SOURCE = "src/parsey/parse.c"
+
+# lrama emits the token enum and the YYSTYPE union into a separate header, which
+# the grammar's own prologue includes so that it can declare yylex() before the
+# generated parser defines it. This mirrors how CRuby's parse.y is built.
+PARSEY_HEADER = "src/parsey/parse.h"
+
+# Find lrama. Prefer an explicit LRAMA override, then the gem (which may be
+# installed either as an executable or as a library), and finally a lrama
+# checked out next to prism (CRuby vendors one in tool/lrama).
+def parsey_lrama_command
+  return ENV["LRAMA"] if ENV["LRAMA"]
+
+  exe = ["lrama", "lrama.bat"].find { |name| ENV["PATH"].split(File::PATH_SEPARATOR).any? { |dir| File.executable?(File.join(dir, name)) } }
+  return exe if exe
+
+  vendored = File.expand_path("../../ruby/tool/lrama", __dir__)
+  return "ruby -I#{vendored}/lib #{vendored}/exe/lrama" if File.exist?("#{vendored}/exe/lrama")
+
+  nil
+end
+
+namespace :parsey do
+  desc "Generate #{PARSEY_SOURCE} from #{PARSEY_GRAMMAR} using lrama"
+  task :generate do
+    lrama = parsey_lrama_command
+    raise "lrama was not found. Install it with `gem install lrama`, or point LRAMA at it." if lrama.nil?
+
+    # lrama derives the #include it emits for the header from the path it is
+    # given, so run it from the grammar's own directory to get a bare
+    # `#include "parse.h"`, and to keep the #line directives relative.
+    Dir.chdir(File.dirname(PARSEY_GRAMMAR)) do
+      sh "#{lrama} -o#{File.basename(PARSEY_SOURCE)} -H#{File.basename(PARSEY_HEADER)} #{File.basename(PARSEY_GRAMMAR)}"
+    end
+  end
+end
+
+# Regenerate the parser only when the grammar has actually changed and lrama is
+# available, so that a plain `rake compile` works without lrama installed.
+file PARSEY_SOURCE => PARSEY_GRAMMAR do
+  if parsey_lrama_command
+    Rake::Task["parsey:generate"].invoke
+  else
+    warn "#{PARSEY_GRAMMAR} is newer than #{PARSEY_SOURCE} but lrama was not found; using the checked-in #{PARSEY_SOURCE}."
+  end
+end
+
+file PARSEY_HEADER => PARSEY_SOURCE
+
+task compile: [PARSEY_SOURCE, PARSEY_HEADER]

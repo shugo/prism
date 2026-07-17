@@ -151,6 +151,9 @@ public abstract class ParsingOptions {
         // freeze
         output.write(0);
 
+        // backend, always the default one for this binding
+        output.write(0);
+
         // scopes
 
         // number of scopes
