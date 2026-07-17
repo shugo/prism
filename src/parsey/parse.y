@@ -1404,6 +1404,8 @@ static NODE *pm_ytarget(struct parser_params *p, NODE *node);
 static NODE *pm_yensure(struct parser_params *p, NODE *body, const YYLTYPE *ensure_loc, const YYLTYPE *loc);
 static NODE *pm_yrescue_finish(struct parser_params *p, NODE *node, const YYLTYPE *keyword_loc, const YYLTYPE *then_loc);
 static NODE *pm_yrescue_modifier(struct parser_params *p, NODE *expr, NODE *fallback, const YYLTYPE *keyword_loc, const YYLTYPE *loc);
+static NODE *pm_yblock_params(struct parser_params *p, NODE *params, NODE *block_locals, const YYLTYPE *opening, const YYLTYPE *closing);
+static void pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
 static rb_node_xstr_t *rb_node_xstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -1628,7 +1630,16 @@ set_line_body(NODE *body, int line)
 static void
 set_embraced_location(NODE *node, const rb_code_location_t *beg, const rb_code_location_t *end)
 {
-    /* becomes real when block nodes are ported */
+    if (node != NULL && PM_NODE_TYPE_P(node, PM_BLOCK_NODE)) {
+        pm_block_node_t *block = (pm_block_node_t *) node;
+        block->opening_loc = pm_yloc(beg);
+        block->closing_loc = pm_yloc(end);
+        block->base.location = (pm_location_t) { beg->beg, end->end - beg->beg };
+        if (block->body != NULL && PM_NODE_TYPE_P(block->body, PM_BEGIN_NODE)) {
+            pm_ybegin_stamp_end(block->body, block->closing_loc);
+            block->body->location = block->base.location;
+        }
+    }
 }
 
 static NODE *
@@ -1674,7 +1685,17 @@ static NODE *call_bin_op(struct parser_params*,NODE*,ID,NODE*,const YYLTYPE*,con
 static NODE *call_uni_op(struct parser_params*,NODE*,ID,const YYLTYPE*,const YYLTYPE*);
 static NODE *new_qcall(struct parser_params* p, ID atype, NODE *recv, ID mid, NODE *args, const YYLTYPE *op_loc, const YYLTYPE *loc);
 static NODE *new_command_qcall(struct parser_params* p, ID atype, NODE *recv, ID mid, NODE *args, NODE *block, const YYLTYPE *op_loc, const YYLTYPE *loc);
-static NODE *method_add_block(struct parser_params*p, NODE *m, NODE *b, const YYLTYPE *loc) {YSTUB("method_add_block"); return b;}
+static NODE *method_add_block(struct parser_params*p, NODE *m, NODE *b, const YYLTYPE *loc)
+{
+    if (m != NULL && b != NULL && PM_NODE_TYPE_P(m, PM_CALL_NODE) && PM_NODE_TYPE_P(b, PM_BLOCK_NODE)) {
+        ((pm_call_node_t *) m)->block = b;
+        m->location = pm_yloc(loc);
+    }
+    else {
+        YSTUB("method_add_block");
+    }
+    return m;
+}
 static NODE *command_add_block(struct parser_params*p, NODE *m, NODE *b, const YYLTYPE *loc);
 
 static bool args_info_empty_p(struct rb_args_info *args);
@@ -4240,7 +4261,7 @@ block_param_def	: '|' opt_block_param opt_bv_decl '|'
                     {
                         p->max_numparam = ORDINAL_PARAM;
                         p->ctxt.in_argdef = 0;
-                        $$ = $2;
+                        $$ = pm_yblock_params(p, (NODE *) $2, $3, &@1, &@4);
                     }
                 ;
 
@@ -9622,9 +9643,14 @@ static uint32_t
 pm_ydvar_depth(struct parser_params *p, ID id)
 {
     uint32_t depth = 0;
+    struct vtable *args = p->lvtbl->args;
+    struct vtable *vars = p->lvtbl->vars;
 
-    for (struct vtable *vars = p->lvtbl->vars; vars != NULL && !DVARS_TERMINAL_P(vars); vars = vars->prev) {
+    while (vars != NULL && !DVARS_TERMINAL_P(vars)) {
         if (vtable_included(vars, id)) return depth;
+        if (args != NULL && !DVARS_TERMINAL_P(args) && vtable_included(args, id)) return depth;
+        vars = vars->prev;
+        if (args != NULL) args = args->prev;
         depth++;
     }
 
@@ -9895,6 +9921,18 @@ pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword)
         uint32_t end = next_keyword.start + next_keyword.length;
         else_clause->base.location.length = end - else_clause->base.location.start;
     }
+}
+
+/* The |params| of a block. */
+static NODE *
+pm_yblock_params(struct parser_params *p, NODE *params, NODE *block_locals, const YYLTYPE *opening, const YYLTYPE *closing)
+{
+    (void) block_locals; /* PORTME: `; x` block-local declarations */
+    pm_location_t location = { opening->beg, closing->end - opening->beg };
+    return (NODE *) pm_block_parameters_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, location,
+        (params != NULL && PM_NODE_TYPE_P(params, PM_PARAMETERS_NODE)) ? (pm_parameters_node_t *) params : NULL,
+        (pm_node_list_t) { 0 }, pm_yloc(opening), pm_yloc(closing));
 }
 
 /* A modifier rescue: expr rescue fallback. */
@@ -10389,8 +10427,19 @@ rb_node_module_new(struct parser_params *p, NODE *nd_cpath, NODE *nd_body, const
 static rb_node_iter_t *
 rb_node_iter_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_body, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_iter_new");
-    return NULL;
+    pm_node_t *body;
+    if (nd_body != NULL && PM_NODE_TYPE_P(nd_body, PM_BEGIN_NODE)) {
+        /* A body that grew rescue/ensure clauses hangs directly off the
+         * block, sharing its span once the braces are known. */
+        body = nd_body;
+    }
+    else {
+        body = (pm_node_t *) pm_ystatements_opt(p, nd_body);
+    }
+    return (rb_node_iter_t *) pm_block_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_ylocals(p), (pm_node_t *) nd_args, body,
+        (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static rb_node_lambda_t *
@@ -12136,8 +12185,9 @@ new_args_tail(struct parser_params *p, rb_node_kw_arg_t *kw_args, ID kw_rest_arg
 static rb_node_args_t *
 args_with_numbered(struct parser_params *p, rb_node_args_t *args, int max_numparam, ID it_id)
 {
-    YSTUB("args_with_numbered");
-    return NULL;
+    if (max_numparam <= 0 && it_id == 0) return args;
+    YSTUB("args_with_numbered"); /* PORTME: numbered parameters and it */
+    return args;
 }
 
 static NODE*
