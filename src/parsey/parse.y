@@ -1415,6 +1415,7 @@ static NODE *pm_yrescue_modifier(struct parser_params *p, NODE *expr, NODE *fall
 static NODE *pm_yblock_params(struct parser_params *p, NODE *params, NODE *block_locals, const YYLTYPE *opening, const YYLTYPE *closing);
 static NODE *pm_yistr(struct parser_params *p, NODE *part);
 static NODE *pm_yindex_call(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
+static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
 static void pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -1435,7 +1436,7 @@ static rb_node_block_pass_t *rb_node_block_pass_new(struct parser_params *p, NOD
 static rb_node_defn_t *rb_node_defn_new(struct parser_params *p, ID nd_mid, NODE *nd_defn, const YYLTYPE *loc);
 static rb_node_defs_t *rb_node_defs_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd_defn, const YYLTYPE *loc);
 static rb_node_alias_t *rb_node_alias_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYPE *loc, const YYLTYPE *keyword_loc);
-static rb_node_valias_t *rb_node_valias_new(struct parser_params *p, ID nd_alias, ID nd_orig, const YYLTYPE *loc, const YYLTYPE *keyword_loc);
+static rb_node_valias_t *rb_node_valias_new(struct parser_params *p, ID nd_alias, ID nd_orig, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *new_loc, const YYLTYPE *old_loc);
 static rb_node_undef_t *rb_node_undef_new(struct parser_params *p, NODE *nd_undef, const YYLTYPE *loc);
 static rb_node_class_t *rb_node_class_new(struct parser_params *p, NODE *nd_cpath, NODE *nd_body, NODE *nd_super, const YYLTYPE *loc, const YYLTYPE *class_keyword_loc, const YYLTYPE *inheritance_operator_loc, const YYLTYPE *end_keyword_loc);
 static rb_node_module_t *rb_node_module_new(struct parser_params *p, NODE *nd_cpath, NODE *nd_body, const YYLTYPE *loc, const YYLTYPE *module_keyword_loc, const YYLTYPE *end_keyword_loc);
@@ -1543,7 +1544,7 @@ static rb_node_error_t *rb_node_error_new(struct parser_params *p, const YYLTYPE
 #define NEW_DEFN(i,s,loc) (NODE *)rb_node_defn_new(p,i,s,loc)
 #define NEW_DEFS(r,i,s,loc) (NODE *)rb_node_defs_new(p,r,i,s,loc)
 #define NEW_ALIAS(n,o,loc,k_loc) (NODE *)rb_node_alias_new(p,n,o,loc,k_loc)
-#define NEW_VALIAS(n,o,loc,k_loc) (NODE *)rb_node_valias_new(p,n,o,loc,k_loc)
+#define NEW_VALIAS(n,o,loc,k_loc,n_loc,o_loc) (NODE *)rb_node_valias_new(p,n,o,loc,k_loc,n_loc,o_loc)
 #define NEW_UNDEF(i,loc) (NODE *)rb_node_undef_new(p,i,loc)
 #define NEW_CLASS(n,b,s,loc,ck_loc,io_loc,ek_loc) (NODE *)rb_node_class_new(p,n,b,s,loc,ck_loc,io_loc,ek_loc)
 #define NEW_MODULE(n,b,loc,mk_loc,ek_loc) (NODE *)rb_node_module_new(p,n,b,loc,mk_loc,ek_loc)
@@ -2772,14 +2773,16 @@ stmt		: keyword_alias[kw] fitem[new] {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fit
                     }
                 | keyword_alias[kw] tGVAR[new] tGVAR[old]
                     {
-                        $$ = NEW_VALIAS($new, $old, &@$, &@kw);
+                        $$ = NEW_VALIAS($new, $old, &@$, &@kw, &@new, &@old);
                     }
                 | keyword_alias[kw] tGVAR[new] tBACK_REF[old]
                     {
-                        char buf[2];
-                        buf[0] = '$';
-                        YSTUB("grammar"); /* PORTME: buf[1] = (char)RNODE_BACK_REF($old)->nd_nth; */
-                        $$ = NEW_VALIAS($new, rb_intern2(buf, 2), &@$, &@kw);
+                        /* the lexer already built the BackReferenceReadNode */
+                        pm_node_t *new_name = (pm_node_t *) pm_global_variable_read_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@new), pm_yid2const(p, $new));
+                        $$ = (NODE *) pm_alias_global_variable_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@$),
+                            new_name, $old, pm_yloc(&@kw));
                     }
                 | keyword_alias tGVAR tNTH_REF[nth]
                     {
@@ -2789,8 +2792,12 @@ stmt		: keyword_alias[kw] fitem[new] {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fit
                     }
                 | keyword_undef[kw] undef_list[list]
                     {
-                        YSTUB("grammar"); /* PORTME: nd_set_first_loc($list, @kw.beg_pos); */
-                        YSTUB("grammar"); /* PORTME: RNODE_UNDEF($list)->keyword_loc = @kw; */
+                        if ($list != NULL && PM_NODE_TYPE_P($list, PM_UNDEF_NODE)) {
+                            pm_undef_node_t *undef = (pm_undef_node_t *) $list;
+                            undef->keyword_loc = pm_yloc(&@kw);
+                            uint32_t undef_end = undef->base.location.start + undef->base.location.length;
+                            undef->base.location = (pm_location_t) { @kw.beg, undef_end - @kw.beg };
+                        }
                         $$ = $list;
                     }
                 | stmt[body] modifier_if[mod] expr_value[cond]
@@ -3258,8 +3265,13 @@ undef_list	: fitem
                     }
                 | undef_list ',' {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fitem
                     {
-                        YSTUB("grammar"); /* PORTME: nd_set_last_loc($1, @4.end_pos); */
-                        YSTUB("grammar"); /* PORTME: rb_parser_ary_push_node(p, RNODE_UNDEF($1)->nd_undefs, $4); */
+                        if ($1 != NULL && $4 != NULL && PM_NODE_TYPE_P($1, PM_UNDEF_NODE)) {
+                            pm_undef_node_t *undef = (pm_undef_node_t *) $1;
+                            pm_node_list_append(p->pm->arena, &undef->names, $4);
+                            uint32_t undef_end = $4->location.start + $4->location.length;
+                            undef->base.location.length = undef_end - undef->base.location.start;
+                        }
+                        $$ = $1;
                     }
                 ;
 
@@ -3763,6 +3775,10 @@ primary		: inline_primary
                 {
                     p->ctxt.in_defined = $ctxt.in_defined;
                     $$ = new_defined(p, $arg, &@$, &@kw);
+                    if ($$ != NULL && PM_NODE_TYPE_P($$, PM_DEFINED_NODE)) {
+                        ((pm_defined_node_t *) $$)->lparen_loc = pm_yloc(&@3);
+                        ((pm_defined_node_t *) $$)->rparen_loc = pm_yloc(&@rparen);
+                    }
                     p->ctxt.has_trailing_semicolon = $ctxt.has_trailing_semicolon;
                 }
             | keyword_not[kw] '(' expr[arg] rparen
@@ -10071,6 +10087,39 @@ pm_yhash_braces(struct parser_params *p, NODE *node, const YYLTYPE *opening, con
     return node;
 }
 
+/* Assemble a case: split the clause carrier into when-conditions and the
+ * trailing else, and stamp the end keyword through the else. */
+static NODE *
+pm_ycase(struct parser_params *p, NODE *predicate, NODE *body, const YYLTYPE *loc, const YYLTYPE *case_keyword_loc, const YYLTYPE *end_keyword_loc)
+{
+    pm_node_list_t conditions = { 0 };
+    pm_else_node_t *else_clause = NULL;
+    pm_location_t end_keyword = pm_yloc(end_keyword_loc);
+
+    if (body != NULL && PM_NODE_TYPE_P(body, PM_ARRAY_NODE)) {
+        pm_array_node_t *carrier = (pm_array_node_t *) body;
+        for (size_t i = 0; i < carrier->elements.size; i++) {
+            pm_node_t *clause = carrier->elements.nodes[i];
+            if (PM_NODE_TYPE_P(clause, PM_ELSE_NODE)) {
+                else_clause = (pm_else_node_t *) clause;
+                else_clause->end_keyword_loc = end_keyword;
+                uint32_t end = end_keyword.start + end_keyword.length;
+                else_clause->base.location.length = end - else_clause->base.location.start;
+            }
+            else {
+                pm_node_list_append(p->pm->arena, &conditions, clause);
+            }
+        }
+    }
+    else if (body != NULL) {
+        YSTUB("pm_ycase");
+    }
+
+    return (NODE *) pm_case_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        predicate, conditions, else_clause, pm_yloc(case_keyword_loc), end_keyword);
+}
+
 /* The defining name of a class/module: the last segment of its path. */
 static pm_constant_id_t
 pm_yconstant_path_name(NODE *cpath)
@@ -10525,15 +10574,13 @@ rb_node_lambda_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_bo
 static rb_node_case_t *
 rb_node_case_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, const YYLTYPE *loc, const YYLTYPE *case_keyword_loc, const YYLTYPE *end_keyword_loc)
 {
-    YSTUB("rb_node_case_new");
-    return NULL;
+    return (rb_node_case_t *) pm_ycase(p, nd_head, nd_body, loc, case_keyword_loc, end_keyword_loc);
 }
 
 static rb_node_case2_t *
 rb_node_case2_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc, const YYLTYPE *case_keyword_loc, const YYLTYPE *end_keyword_loc)
 {
-    YSTUB("rb_node_case2_new");
-    return NULL;
+    return (rb_node_case2_t *) pm_ycase(p, NULL, nd_body, loc, case_keyword_loc, end_keyword_loc);
 }
 
 static rb_node_case3_t *
@@ -10546,8 +10593,55 @@ rb_node_case3_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, const Y
 static rb_node_when_t *
 rb_node_when_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, NODE *nd_next, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *then_keyword_loc)
 {
-    YSTUB("rb_node_when_new");
-    return NULL;
+    pm_node_list_t conditions = { 0 };
+    if (nd_head != NULL && PM_NODE_TYPE_P(nd_head, PM_ARRAY_NODE)) {
+        conditions = ((pm_array_node_t *) nd_head)->elements;
+    }
+    else if (nd_head != NULL) {
+        pm_node_list_append(p->pm->arena, &conditions, nd_head);
+    }
+
+    pm_location_t keyword = pm_yloc(keyword_loc);
+    pm_location_t then_keyword = { 0 };
+    if (then_keyword_loc->end - then_keyword_loc->beg == 4 &&
+        memcmp(p->pm->start + then_keyword_loc->beg, "then", 4) == 0) {
+        then_keyword = pm_yloc(then_keyword_loc);
+    }
+
+    pm_statements_node_t *statements = pm_ystatements_opt(p, nd_body);
+
+    /* the clause's own span: keyword through its own body */
+    uint32_t end = keyword.start + keyword.length;
+    if (statements != NULL) end = statements->base.location.start + statements->base.location.length;
+    else if (then_keyword.length > 0) end = then_keyword.start + then_keyword.length;
+    else if (conditions.size > 0) {
+        pm_node_t *last = conditions.nodes[conditions.size - 1];
+        end = last->location.start + last->location.length;
+    }
+
+    pm_node_t *when = (pm_node_t *) pm_when_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, (pm_location_t) { keyword.start, end - keyword.start },
+        keyword, conditions, then_keyword, statements);
+
+    /* Clauses collect in a carrier: this when first, then whatever follows
+     * (more whens, or the else as the last element). */
+    pm_node_list_t clauses = { 0 };
+    pm_node_list_append(p->pm->arena, &clauses, when);
+    if (nd_next != NULL) {
+        if (PM_NODE_TYPE_P(nd_next, PM_ARRAY_NODE)) {
+            pm_array_node_t *rest = (pm_array_node_t *) nd_next;
+            for (size_t i = 0; i < rest->elements.size; i++) {
+                pm_node_list_append(p->pm->arena, &clauses, rest->elements.nodes[i]);
+            }
+        }
+        else {
+            pm_node_list_append(p->pm->arena, &clauses, nd_next);
+        }
+    }
+
+    return (rb_node_when_t *) pm_array_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, when->location, clauses,
+        (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static rb_node_in_t *
@@ -11129,22 +11223,31 @@ rb_node_block_pass_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *lo
 static rb_node_alias_t *
 rb_node_alias_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYPE *loc, const YYLTYPE *keyword_loc)
 {
-    YSTUB("rb_node_alias_new");
-    return NULL;
+    return (rb_node_alias_t *) pm_alias_method_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        nd_1st, nd_2nd, pm_yloc(keyword_loc));
 }
 
 static rb_node_valias_t *
-rb_node_valias_new(struct parser_params *p, ID nd_alias, ID nd_orig, const YYLTYPE *loc, const YYLTYPE *keyword_loc)
+rb_node_valias_new(struct parser_params *p, ID nd_alias, ID nd_orig, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *new_loc, const YYLTYPE *old_loc)
 {
-    YSTUB("rb_node_valias_new");
-    return NULL;
+    pm_node_t *new_name = (pm_node_t *) pm_global_variable_read_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(new_loc), YID2CONST(nd_alias));
+    pm_node_t *old_name = (pm_node_t *) pm_global_variable_read_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(old_loc), YID2CONST(nd_orig));
+    return (rb_node_valias_t *) pm_alias_global_variable_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        new_name, old_name, pm_yloc(keyword_loc));
 }
 
 static rb_node_undef_t *
 rb_node_undef_new(struct parser_params *p, NODE *nd_undef, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_undef_new");
-    return NULL;
+    pm_node_list_t names = { 0 };
+    if (nd_undef != NULL) pm_node_list_append(p->pm->arena, &names, nd_undef);
+    return (rb_node_undef_t *) pm_undef_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        names, (pm_location_t) { 0 });
 }
 
 static rb_node_errinfo_t *
@@ -11750,8 +11853,27 @@ kwd_append(rb_node_kw_arg_t *kwlist, rb_node_kw_arg_t *kw)
 static NODE *
 new_defined(struct parser_params *p, NODE *expr, const YYLTYPE *loc, const YYLTYPE *keyword_loc)
 {
-    YSTUB("new_defined");
-    return NULL;
+    pm_location_t lparen = { 0 };
+    pm_location_t rparen = { 0 };
+
+    /* defined?(x) owns its parentheses; a parenthesized single expression
+     * unwraps into the node's lparen/rparen. */
+    if (expr != NULL && PM_NODE_TYPE_P(expr, PM_PARENTHESES_NODE)) {
+        pm_parentheses_node_t *parens = (pm_parentheses_node_t *) expr;
+        if (parens->body != NULL && PM_NODE_TYPE_P(parens->body, PM_STATEMENTS_NODE)) {
+            pm_statements_node_t *statements = (pm_statements_node_t *) parens->body;
+            if (statements->body.size == 1) {
+                lparen = parens->opening_loc;
+                rparen = parens->closing_loc;
+                expr = statements->body.nodes[0];
+                expr->flags &= (pm_node_flags_t) ~PM_NODE_FLAG_NEWLINE;
+            }
+        }
+    }
+
+    return (NODE *) pm_defined_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        lparen, expr, rparen, pm_yloc(keyword_loc));
 }
 
 static NODE*
