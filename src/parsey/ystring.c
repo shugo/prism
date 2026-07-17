@@ -202,7 +202,7 @@ pm_ystring_cat(pm_ystring_t *str, const char *ptr, long len) {
      * the realloc below would move out from under them. Remember where they
      * are so they can be found again afterwards. */
     long off = -1;
-    if (ptr >= str->ptr && ptr <= str->ptr + str->len) off = ptr - str->ptr;
+    if (ptr >= str->ptr && ptr <= str->ptr + str->len) off = (long) (ptr - str->ptr);
 
     long total = str->len + len;
     char *reallocated = xrealloc_sized(str->ptr, (size_t) total + PM_YSTRING_TERM_LEN, (size_t) str->len + PM_YSTRING_TERM_LEN);
