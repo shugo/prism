@@ -215,6 +215,8 @@ Gem::Specification.new do |spec|
     "src/options.c",
     "src/parser.c",
     "src/parsey/defs/id.def",
+    "src/parsey/id.h",
+    "src/parsey/lex.inc",
     "src/parsey/parse.c",
     "src/parsey/parse.h",
     "src/parsey/parse.y",
