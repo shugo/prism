@@ -914,6 +914,8 @@ typedef struct token_info {
 typedef struct end_expect_token_locations {
     uint32_t pos;		/* offset of the opening keyword */
     uint32_t line_start;	/* offset of the start of its line */
+    int lineno;			/* its line number */
+    const char *kind;		/* "def", "class", ... for diagnostics */
     struct end_expect_token_locations *prev;
 } end_expect_token_locations_t;
 
@@ -1004,6 +1006,10 @@ struct parser_params {
     /* fork: the top-level statements reduced so far; when the parser aborts
      * beyond recovery, this still holds everything before the error. */
     NODE *ytop_progress;
+
+    /* fork: what the last dummy end token closed, for its diagnostic. */
+    const char *ydummy_end_kind;
+    int ydummy_end_lineno;
 
     /* fork: a heredoc opener span waiting to become the deferred END
      * token's location (see pm_yheredoc_end_capture). */
@@ -1184,10 +1190,12 @@ debug_end_expect_token_locations(struct parser_params *p, const char *name)
  * behind the error_tolerant option; the fork is always tolerant, as the
  * hand-written parser is. */
 static void
-push_end_expect_token_locations(struct parser_params *p, const YYLTYPE *loc)
+push_end_expect_token_locations(struct parser_params *p, const YYLTYPE *loc, const char *kind)
 {
     end_expect_token_locations_t *locations = xmalloc(sizeof(end_expect_token_locations_t));
     locations->pos = loc->beg;
+    locations->lineno = p->ruby_sourceline;
+    locations->kind = kind;
 
     /* the start of the keyword's line, for the indentation heuristic */
     uint32_t line_start = loc->beg;
@@ -3727,6 +3735,12 @@ paren_args	: '(' opt_call_args rparen
                         $$ = $2;
                         pm_yparens_set(p, &@1, &@3);
                     }
+                | '(' opt_call_args error
+                    {
+                        /* fork: unclosed argument list; recover with the
+                         * arguments seen so far */
+                        $$ = $2;
+                    }
                 | '(' args ',' args_forward rparen
                     {
                         if (!check_forwarding_args(p)) {
@@ -4143,7 +4157,7 @@ primary		: inline_primary
                     /* fork: claim the parameter parens before the body's
                      * calls can overwrite the pending slot */
                     pm_ydef_parens(p, (NODE *) $head->nd_def);
-                    push_end_expect_token_locations(p, &@head);
+                    push_end_expect_token_locations(p, &@head, "def");
                 }
               bodystmt
               k_end
@@ -4158,7 +4172,7 @@ primary		: inline_primary
                     /* fork: claim the parameter parens before the body's
                      * calls can overwrite the pending slot */
                     pm_ydef_parens(p, (NODE *) $head->nd_def);
-                    push_end_expect_token_locations(p, &@head);
+                    push_end_expect_token_locations(p, &@head, "def");
                 }
               bodystmt
               k_end
@@ -4199,7 +4213,7 @@ primary_value	: value_expr(primary)
 k_begin		: keyword_begin
                     {
                         token_info_push(p, "begin", &@$);
-                        push_end_expect_token_locations(p, &@1);
+                        push_end_expect_token_locations(p, &@1, "begin");
                     }
                 ;
 
@@ -4207,7 +4221,7 @@ k_if		: keyword_if
                     {
                         WARN_EOL("if");
                         token_info_push(p, "if", &@$);
-                        push_end_expect_token_locations(p, &@1);
+                        push_end_expect_token_locations(p, &@1, "if");
                         if (p->token_info && p->token_info->nonspc &&
                             p->token_info->next && !strcmp(p->token_info->next->token, "else")) {
                             const char *tok = p->lex.ptok - rb_strlen_lit("if");
@@ -4224,7 +4238,7 @@ k_if		: keyword_if
 k_unless	: keyword_unless
                     {
                         token_info_push(p, "unless", &@$);
-                        push_end_expect_token_locations(p, &@1);
+                        push_end_expect_token_locations(p, &@1, "unless");
                     }
                 ;
 
@@ -4232,7 +4246,7 @@ k_while		: keyword_while[kw] allow_exits
                     {
                         $$ = $allow_exits;
                         token_info_push(p, "while", &@$);
-                        push_end_expect_token_locations(p, &@kw);
+                        push_end_expect_token_locations(p, &@kw, "while");
                     }
                 ;
 
@@ -4240,14 +4254,14 @@ k_until		: keyword_until[kw] allow_exits
                     {
                         $$ = $allow_exits;
                         token_info_push(p, "until", &@$);
-                        push_end_expect_token_locations(p, &@kw);
+                        push_end_expect_token_locations(p, &@kw, "until");
                     }
                 ;
 
 k_case		: keyword_case
                     {
                         token_info_push(p, "case", &@$);
-                        push_end_expect_token_locations(p, &@1);
+                        push_end_expect_token_locations(p, &@1, "case");
                     }
                 ;
 
@@ -4255,14 +4269,14 @@ k_for		: keyword_for[kw] allow_exits
                     {
                         $$ = $allow_exits;
                         token_info_push(p, "for", &@$);
-                        push_end_expect_token_locations(p, &@kw);
+                        push_end_expect_token_locations(p, &@kw, "for");
                     }
                 ;
 
 k_class		: keyword_class
                     {
                         token_info_push(p, "class", &@$);
-                        push_end_expect_token_locations(p, &@1);
+                        push_end_expect_token_locations(p, &@1, "class");
                         $$ = p->ctxt;
                         p->ctxt.in_rescue = before_rescue;
                     }
@@ -4271,7 +4285,7 @@ k_class		: keyword_class
 k_module	: keyword_module
                     {
                         token_info_push(p, "module", &@$);
-                        push_end_expect_token_locations(p, &@1);
+                        push_end_expect_token_locations(p, &@1, "module");
                         $$ = p->ctxt;
                         p->ctxt.in_rescue = before_rescue;
                     }
@@ -4288,14 +4302,14 @@ k_def		: keyword_def
 k_do		: keyword_do
                     {
                         token_info_push(p, "do", &@$);
-                        push_end_expect_token_locations(p, &@1);
+                        push_end_expect_token_locations(p, &@1, "do");
                     }
                 ;
 
 k_do_block	: keyword_do_block
                     {
                         token_info_push(p, "do", &@$);
-                        push_end_expect_token_locations(p, &@1);
+                        push_end_expect_token_locations(p, &@1, "do");
                     }
                 ;
 
@@ -4349,7 +4363,13 @@ k_end		: keyword_end
                     }
                 | tDUMNY_END
                     {
-                        compile_error(p, "syntax error, unexpected end-of-input");
+                        if (p->ydummy_end_kind) {
+                            compile_error(p, "unexpected end-of-input; expected an `end` to close the `%s` at line %d",
+                                          p->ydummy_end_kind, p->ydummy_end_lineno);
+                        }
+                        else {
+                            compile_error(p, "syntax error, unexpected end-of-input");
+                        }
                     }
                 ;
 
@@ -4601,7 +4621,7 @@ lambda_body	: tLAMBEG compstmt(stmts) '}'
                     }
                 | keyword_do_LAMBDA
                     {
-                        push_end_expect_token_locations(p, &@1);
+                        push_end_expect_token_locations(p, &@1, "do");
                     }
                   bodystmt k_end
                     {
@@ -5587,6 +5607,15 @@ f_paren_args	: '(' f_args rparen
                         p->yfparens.opening = @1;
                         p->yfparens.closing = @3;
                         p->yfparens.set = 1;
+                        SET_LEX_STATE(EXPR_BEG);
+                        p->command_start = TRUE;
+                        p->ctxt.in_argdef = 0;
+                    }
+                | '(' f_args error
+                    {
+                        /* fork: unclosed parameter list; recover with the
+                         * parameters seen so far */
+                        $$ = $2;
                         SET_LEX_STATE(EXPR_BEG);
                         p->command_start = TRUE;
                         p->ctxt.in_argdef = 0;
@@ -9196,6 +9225,8 @@ parser_yylex(struct parser_params *p)
       case -1:			/* end of script. */
         p->eofp = 1;
         if (p->end_expect_token_locations) {
+            p->ydummy_end_kind = p->end_expect_token_locations->kind;
+            p->ydummy_end_lineno = p->end_expect_token_locations->lineno;
             pop_end_expect_token_locations(p);
             p->yylloc->beg = p->yylloc->end = YOFF(p->lex.pcur);
             return tDUMNY_END;
