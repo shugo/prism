@@ -1480,6 +1480,8 @@ static NODE *pm_yensure(struct parser_params *p, NODE *body, const YYLTYPE *ensu
 static NODE *pm_yrescue_finish(struct parser_params *p, NODE *node, const YYLTYPE *keyword_loc, const YYLTYPE *then_loc);
 static NODE *pm_yrescue_modifier(struct parser_params *p, NODE *expr, NODE *fallback, const YYLTYPE *keyword_loc, const YYLTYPE *loc);
 static NODE *pm_yblock_params(struct parser_params *p, NODE *params, NODE *block_locals, const YYLTYPE *opening, const YYLTYPE *closing);
+static NODE *pm_yblock_local(struct parser_params *p, ID name, const YYLTYPE *loc);
+static NODE *pm_yparam_group(struct parser_params *p, NODE *node);
 static NODE *pm_yistr(struct parser_params *p, NODE *part);
 static NODE *pm_yindex_call(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
@@ -2377,7 +2379,8 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
 %type <node_masgn> f_margs
 %type <node> assoc_list assocs assoc undef_list backref string_dvar for_var
 %type <node_args> block_param opt_block_param_def block_param_def opt_block_param
-%type <id> do bv_decls opt_bv_decl bvar
+%type <id> do
+%type <node> bv_decls opt_bv_decl bvar
 %type <node> lambda brace_body do_body
 %type <locations_lambda_body> lambda_body
 %type <node_args> f_larglist f_largs largs_tail
@@ -2771,6 +2774,10 @@ top_stmt	: stmt
                 | keyword_BEGIN begin_block
                     {
                         $$ = $2;
+                        if ($$ != NULL && PM_NODE_TYPE_P($$, PM_PRE_EXECUTION_NODE)) {
+                            ((pm_pre_execution_node_t *) $$)->keyword_loc = pm_yloc(&@1);
+                            $$->location = pm_yloc(&@$);
+                        }
                     }
                 ;
 
@@ -2779,9 +2786,12 @@ block_open	: '{' {$$ = init_block_exit(p);};
 begin_block	: block_open compstmt(top_stmts) '}'
                     {
                         restore_block_exit(p, $block_open);
-                        p->eval_tree_begin = block_append(p, p->eval_tree_begin,
-                                                          NEW_BEGIN($compstmt, &@$));
-                        $$ = NEW_BEGIN(0, &@$);
+                        /* prism keeps BEGIN inline as PreExecutionNode; the
+                         * keyword is stamped by the consuming rule */
+                        $$ = (NODE *) pm_pre_execution_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, (pm_location_t) { 0 },
+                            pm_ystatements_opt(p, $compstmt), (pm_location_t) { 0 },
+                            pm_yloc(&@block_open), pm_yloc(&@3));
                     }
                 ;
 
@@ -2931,7 +2941,6 @@ stmt		: keyword_alias[kw] fitem[new] {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fit
                         {
                             NODE *scope = NEW_SCOPE2(0 /* tbl */, 0 /* args */, $body /* body */, NULL /* parent */, &@$);
                             $$ = NEW_POSTEXE(scope, &@$, &@k_end, &@lbrace, &@rbrace);
-                            YSTUB("grammar"); /* PORTME: RNODE_SCOPE(scope)->nd_parent = $$; */
                         }
                     }
                 | command_asgn
@@ -4276,12 +4285,16 @@ for_var		: lhs
 
 f_marg		: f_norm_arg
                     {
+                        /* fork: group members are parameters; the args table
+                         * keeps the scope's locals in declaration order */
+                        arg_var(p, $1);
                         $$ = assignable(p, $1, 0, &@$);
                         mark_lvar_used(p, $$);
                     }
                 | tLPAREN f_margs rparen
                     {
                         $$ = (NODE *)$2;
+                        pm_ymulti_parens(p, $$, &@1, &@3);
                     }
                 ;
 
@@ -4310,6 +4323,8 @@ f_margs		: mlhs_items(f_marg)
 
 f_rest_marg	: tSTAR f_norm_arg
                     {
+                        /* fork: as f_marg, the args table keeps order */
+                        arg_var(p, $2);
                         $$ = assignable(p, $2, 0, &@$);
                         mark_lvar_used(p, $$);
                     }
@@ -4362,7 +4377,7 @@ block_param_def	: '|' opt_block_param opt_bv_decl '|'
                     {
                         p->max_numparam = ORDINAL_PARAM;
                         p->ctxt.in_argdef = 0;
-                        $$ = pm_yblock_params(p, (NODE *) $2, NULL, &@1, &@4);
+                        $$ = pm_yblock_params(p, (NODE *) $2, $opt_bv_decl, &@1, &@4);
                     }
                 ;
 
@@ -4379,19 +4394,26 @@ opt_bv_decl	: '\n'?
                     }
                 | '\n'? ';' bv_decls '\n'?
                     {
-                        $$ = 0;
+                        $$ = $bv_decls;
                     }
                 ;
 
 bv_decls	: bvar
                 | bv_decls ',' bvar
+                    {
+                        $$ = list_append(p, $1, $3 ? ((pm_array_node_t *) $3)->elements.nodes[0] : NULL);
+                    }
                 ;
 
 bvar		: tIDENTIFIER
                     {
                         new_bv(p, $1);
+                        $$ = NEW_LIST(pm_yblock_local(p, $1, &@1), &@1);
                     }
                 | f_bad_arg
+                    {
+                        $$ = 0;
+                    }
                 ;
 
 max_numparam	:   {
@@ -4446,7 +4468,7 @@ lambda		: tLAMBDA[lpar]
 f_larglist	: '(' f_largs[args] opt_bv_decl ')'
                     {
                         p->ctxt.in_argdef = 0;
-                        $$ = (rb_node_args_t *) pm_yblock_params(p, (NODE *) $args, NULL /* PORTME: $opt_bv_decl */, &@1, &@4);
+                        $$ = (rb_node_args_t *) pm_yblock_params(p, (NODE *) $args, $opt_bv_decl, &@1, &@4);
                         p->max_numparam = ORDINAL_PARAM;
                     }
                 | f_largs[args]
@@ -5586,19 +5608,11 @@ f_arg_item	: f_arg_asgn
                     }
                 | tLPAREN f_margs rparen
                     {
-                        ID tid = internal_id(p);
-                        YYLTYPE loc;
-                        YSTUB("grammar"); /* PORTME: loc.beg_pos = @2.beg_pos; */
-                        YSTUB("grammar"); /* PORTME: loc.end_pos = @2.beg_pos; */
-                        arg_var(p, tid);
-                        if (dyna_in_block(p)) {
-                            YSTUB("grammar"); /* PORTME: $2->nd_value = NEW_DVAR(tid, &loc); */
-                        }
-                        else {
-                            YSTUB("grammar"); /* PORTME: $2->nd_value = NEW_LVAR(tid, &loc); */
-                        }
-                        $$ = NEW_ARGS_AUX(tid, 1, &NULL_LOC);
-                        YSTUB("grammar"); /* PORTME: $$->nd_next = (NODE *)$2; */
+                        /* CRuby binds the group to an internal variable and
+                         * destructures in the prologue; prism nests the group
+                         * (with parameter-flavored leaves) in the list */
+                        pm_ymulti_parens(p, (NODE *) $2, &@1, &@3);
+                        $$ = (rb_node_args_aux_t *) NEW_LIST(pm_yparam_group(p, (NODE *) $2), &@$);
                     }
                 ;
 
@@ -10377,12 +10391,58 @@ pm_yclass_body(struct parser_params *p, NODE *body, const YYLTYPE *loc, const YY
     return (pm_node_t *) pm_ystatements_opt(p, body);
 }
 
+/* One block-local declaration, the x of |a; x|. */
+static NODE *
+pm_yblock_local(struct parser_params *p, ID name, const YYLTYPE *loc)
+{
+    return (NODE *) pm_block_local_variable_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), pm_yid2const(p, name));
+}
+
+/* A destructured parameter group: the masgn machinery built a MultiTargetNode
+ * whose leaves are local-variable targets; in parameter position prism spells
+ * those RequiredParameterNode. */
+static NODE *
+pm_yparam_group(struct parser_params *p, NODE *node)
+{
+    if (node == NULL) return NULL;
+
+    switch (PM_NODE_TYPE(node)) {
+      case PM_LOCAL_VARIABLE_TARGET_NODE: {
+        pm_local_variable_target_node_t *target = (pm_local_variable_target_node_t *) node;
+        return (NODE *) pm_required_parameter_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, node->location, target->name);
+      }
+      case PM_SPLAT_NODE: {
+        pm_splat_node_t *splat = (pm_splat_node_t *) node;
+        splat->expression = pm_yparam_group(p, splat->expression);
+        return node;
+      }
+      case PM_MULTI_TARGET_NODE: {
+        pm_multi_target_node_t *target = (pm_multi_target_node_t *) node;
+        for (size_t i = 0; i < target->lefts.size; i++) {
+            target->lefts.nodes[i] = pm_yparam_group(p, target->lefts.nodes[i]);
+        }
+        if (target->rest != NULL) target->rest = pm_yparam_group(p, target->rest);
+        for (size_t i = 0; i < target->rights.size; i++) {
+            target->rights.nodes[i] = pm_yparam_group(p, target->rights.nodes[i]);
+        }
+        return node;
+      }
+      default:
+        return node;
+    }
+}
+
 /* The |params| of a block, or a lambda's -> (params). A NULL opening means
  * the undelimited lambda form ->a { }, whose span is the parameters' own. */
 static NODE *
 pm_yblock_params(struct parser_params *p, NODE *params, NODE *block_locals, const YYLTYPE *opening, const YYLTYPE *closing)
 {
-    (void) block_locals; /* PORTME: `; x` block-local declarations */
+    pm_node_list_t locals = { 0 };
+    if (block_locals != NULL && PM_NODE_TYPE_P(block_locals, PM_ARRAY_NODE)) {
+        locals = ((pm_array_node_t *) block_locals)->elements;
+    }
 
     pm_parameters_node_t *parameters =
         (params != NULL && PM_NODE_TYPE_P(params, PM_PARAMETERS_NODE)) ? (pm_parameters_node_t *) params : NULL;
@@ -10402,7 +10462,7 @@ pm_yblock_params(struct parser_params *p, NODE *params, NODE *block_locals, cons
 
     return (NODE *) pm_block_parameters_node_new(
         p->pm->arena, ++p->pm->node_id, 0, location,
-        parameters, (pm_node_list_t) { 0 }, opening_loc, closing_loc);
+        parameters, locals, opening_loc, closing_loc);
 }
 
 /* A modifier rescue: expr rescue fallback. */
@@ -10843,8 +10903,12 @@ rb_node_scope_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_bod
 static rb_node_scope_t *
 rb_node_scope_new2(struct parser_params *p, rb_ast_id_table_t *nd_tbl, rb_node_args_t *nd_args, NODE *nd_body, NODE *nd_parent, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_scope_new2");
-    return NULL;
+    /* the scope wrapper is CRuby bookkeeping; the body is what survives */
+    (void) nd_tbl;
+    (void) nd_args;
+    (void) nd_parent;
+    (void) loc;
+    return (rb_node_scope_t *) nd_body;
 }
 
 static rb_node_defn_t *
@@ -11407,6 +11471,13 @@ rb_node_masgn_new(struct parser_params *p, NODE *nd_head, NODE *nd_args, const Y
         pm_location_t star = { 0 };
         for (uint32_t scan = lo; scan < hi; scan++) {
             if (p->pm->start[scan] == '*') { star = (pm_location_t) { scan, 1 }; break; }
+        }
+        if (star.length == 0 && NODE_NAMED_REST_P(rest_node) &&
+            p->pm->start[rest_node->location.start] == '*') {
+            /* the f_rest_marg shape: the target's own span includes the star */
+            star = (pm_location_t) { rest_node->location.start, 1 };
+            rest_node->location.start += 1;
+            rest_node->location.length -= 1;
         }
 
         if (NODE_NAMED_REST_P(rest_node)) {
@@ -12001,8 +12072,10 @@ rb_node_defined_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc, 
 static rb_node_postexe_t *
 rb_node_postexe_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *opening_loc, const YYLTYPE *closing_loc)
 {
-    YSTUB("rb_node_postexe_new");
-    return NULL;
+    return (rb_node_postexe_t *) pm_post_execution_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_ystatements_opt(p, nd_body), pm_yloc(keyword_loc),
+        pm_yloc(opening_loc), pm_yloc(closing_loc));
 }
 
 static rb_node_attrasgn_t *
@@ -13154,8 +13227,8 @@ splat_array(NODE* node)
 static void
 mark_lvar_used(struct parser_params *p, NODE *rhs)
 {
-    YSTUB("mark_lvar_used");
-    return;
+    /* upstream marks LVAR_USED for unused-variable warnings, deferred */
+    (void) rhs;
 }
 
 static int is_static_content(NODE *node);
@@ -13339,25 +13412,57 @@ cond0(struct parser_params *p, NODE *node, enum cond_type type, const YYLTYPE *l
     return NULL;
 }
 
-/* A regexp in condition position matches against $_; prism has dedicated
- * node types for it. Flip-flop ranges are not ported yet. */
+/* Condition-position rewrites, as cond0 performs: a regexp matches against
+ * $_, a range becomes a flip-flop, and the rewrite descends through the
+ * boolean operators and parentheses the way CRuby's cond0 recurses. */
 static NODE*
 pm_ycond_regexp(struct parser_params *p, NODE *node)
 {
     if (node == NULL) return NULL;
-    if (PM_NODE_TYPE_P(node, PM_REGULAR_EXPRESSION_NODE)) {
+    switch (PM_NODE_TYPE(node)) {
+      case PM_REGULAR_EXPRESSION_NODE: {
         pm_regular_expression_node_t *regexp = (pm_regular_expression_node_t *) node;
         return (NODE *) pm_match_last_line_node_new(
             p->pm->arena, ++p->pm->node_id, regexp->base.flags, regexp->base.location,
             regexp->opening_loc, regexp->content_loc, regexp->closing_loc, regexp->unescaped);
-    }
-    if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_REGULAR_EXPRESSION_NODE)) {
+      }
+      case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE: {
         pm_interpolated_regular_expression_node_t *regexp = (pm_interpolated_regular_expression_node_t *) node;
         return (NODE *) pm_interpolated_match_last_line_node_new(
             p->pm->arena, ++p->pm->node_id, regexp->base.flags, regexp->base.location,
             regexp->opening_loc, regexp->parts, regexp->closing_loc);
+      }
+      case PM_RANGE_NODE: {
+        pm_range_node_t *range = (pm_range_node_t *) node;
+        return (NODE *) pm_flip_flop_node_new(
+            p->pm->arena, ++p->pm->node_id, range->base.flags, range->base.location,
+            range->left, range->right, range->operator_loc);
+      }
+      case PM_AND_NODE: {
+        pm_and_node_t *and_node = (pm_and_node_t *) node;
+        and_node->left = pm_ycond_regexp(p, and_node->left);
+        and_node->right = pm_ycond_regexp(p, and_node->right);
+        return node;
+      }
+      case PM_OR_NODE: {
+        pm_or_node_t *or_node = (pm_or_node_t *) node;
+        or_node->left = pm_ycond_regexp(p, or_node->left);
+        or_node->right = pm_ycond_regexp(p, or_node->right);
+        return node;
+      }
+      case PM_PARENTHESES_NODE: {
+        pm_parentheses_node_t *parens = (pm_parentheses_node_t *) node;
+        if (parens->body != NULL && PM_NODE_TYPE_P(parens->body, PM_STATEMENTS_NODE)) {
+            pm_statements_node_t *statements = (pm_statements_node_t *) parens->body;
+            if (statements->body.size == 1) {
+                statements->body.nodes[0] = pm_ycond_regexp(p, statements->body.nodes[0]);
+            }
+        }
+        return node;
+      }
+      default:
+        return node;
     }
-    return node;
 }
 
 static NODE*
