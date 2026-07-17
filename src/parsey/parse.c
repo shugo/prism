@@ -65,7 +65,7 @@
 
 
 /* First part of user prologue.  */
-#line 29 "parse.y"
+#line 42 "parse.y"
 
 
 /* The generated tables and yyparse() body trip several of the warnings that
@@ -541,7 +541,7 @@ static const yytype_int8 yytranslate[] =
 /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
 static const yytype_int8 yyrline[] =
 {
-       0,   100,   100
+       0,   113,   113
 };
 #endif
 
@@ -1513,7 +1513,7 @@ yyreduce:
   switch (yyn)
     {
   case 2: /* program: %empty  */
-#line 100 "parse.y"
+#line 113 "parse.y"
             {
                 yp->result = NULL;
             }
@@ -1754,7 +1754,7 @@ yyreturnlab:
   return yyresult;
 }
 
-#line 104 "parse.y"
+#line 117 "parse.y"
 
 
 #if defined(__GNUC__) || defined(__clang__)

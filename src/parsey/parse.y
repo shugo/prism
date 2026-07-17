@@ -20,6 +20,19 @@
     | rb_ast_t arena   | pm_parser_t's arenas                |
     | YYLTYPE          | byte offsets into the source        |
 
+  On locations. CRuby's lexer reads the source a line at a time through
+  p->lex.gets, because it has to support streaming, and it tracks positions as
+  (line, column) pairs. Prism has the whole source in memory and wants byte
+  offsets. Rather than convert between the two, the line reader here hands the
+  lexer slices of prism's own source buffer instead of copies of them, so that
+  p->lex.pbeg, .pcur and .pend all point into the source and an offset is just
+  `ptr - parser->start`. This is only sound because the lexer never writes
+  through those pointers -- it accumulates into tokenbuf instead, and the one
+  routine that does mutate a string in place, dedent_string, operates on the
+  literals the lexer built rather than on the line buffer. Keep it that way:
+  it is what makes the offsets exact by construction rather than by arithmetic
+  that has to be kept in step with the lexer.
+
   The generated parser is compiled into libprism, which is loaded into CRuby
   processes that already export CRuby's own parser symbols, so every symbol
   defined here is either static or prefixed with pm_y.
