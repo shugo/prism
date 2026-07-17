@@ -53,7 +53,9 @@ extern int yydebug;
     YYEMPTY = -2,
     YYEOF = 0,                     /* "end of file"  */
     YYerror = 256,                 /* error  */
-    YYUNDEF = 257                  /* "invalid token"  */
+    YYUNDEF = 257,                 /* "invalid token"  */
+    tUPLUS = 132,                  /* "unary+"  */
+    keyword_nil = 258              /* "'nil'"  */
   };
   typedef enum yytokentype yytoken_kind_t;
 #endif
@@ -63,11 +65,11 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 105 "parse.y"
+#line 122 "parse.y"
 
     pm_node_t *node;
 
-#line 71 "parse.h"
+#line 73 "parse.h"
 
 };
 typedef union YYSTYPE YYSTYPE;

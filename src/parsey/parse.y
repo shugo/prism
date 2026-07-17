@@ -102,6 +102,23 @@ static void yyerror(YYLTYPE *lloc, struct pm_yparser *yp, const char *msg);
 %lex-param {struct pm_yparser *yp}
 %parse-param {struct pm_yparser *yp}
 
+/* Operator tokens are declared the way CRuby declares them, with their numbers
+ * coming from defs/id.def by way of tool/id2token.rb rather than being written
+ * out here. Two tokens are declared while the grammar is a placeholder so that
+ * the build exercises the filter rather than assuming it works; the rest arrive
+ * with the grammar. yid.c mirrors these numbers for the operator names, so they
+ * have to agree with id.def.
+ *
+ * The keyword token is not incidental: lrama omits the trailing comma after
+ * whichever token is numbered yymaxutok, on the assumption that it is the last
+ * one declared (lib/lrama/output.rb, token_enums). Operator tokens are numbered
+ * below the 258 that bison starts users at, so a grammar whose only tokens are
+ * operators generates an enum that does not compile. CRuby never trips this
+ * because its keywords sit above its operators; keep at least one token here
+ * that does the same. */
+%token tUPLUS       RUBY_TOKEN(UPLUS)  "unary+"
+%token keyword_nil  258                "'nil'"
+
 %union {
     pm_node_t *node;
 }
