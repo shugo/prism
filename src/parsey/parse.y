@@ -140,6 +140,13 @@ typedef struct {
  * pointers into the source, which is what lex.pbeg/.pcur/.pend are. */
 #define YOFF(ptr) ((uint32_t) ((const uint8_t *) (ptr) - p->pm->start))
 
+/* The byte-offset YYLTYPE as a prism location. */
+static inline pm_location_t
+pm_yloc(const pm_yloc_t *loc)
+{
+    return (pm_location_t) { loc->beg, loc->end - loc->beg };
+}
+
 /* The handful of places that still mention VALUE are all in code that is
  * stubbed out pending its port; the typedef keeps their signatures compiling
  * and nothing else. */
@@ -958,6 +965,12 @@ struct parser_params {
         YYLTYPE closing;
         unsigned int set: 1;
     } yparens;
+
+    /* fork: the `do` of the expr_value_do just reduced, for while/until. */
+    struct {
+        YYLTYPE loc;
+        unsigned int set: 1;
+    } ydo;
     int tokidx;
     int toksiz;
     int heredoc_end;
@@ -1376,6 +1389,12 @@ static rb_node_str_t *rb_node_str_new(struct parser_params *p, rb_parser_string_
 static NODE *string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static void pm_yparens_set(struct parser_params *p, const YYLTYPE *opening, const YYLTYPE *closing);
 static NODE *pm_yfcall_args(struct parser_params *p, NODE *node, NODE *args, const YYLTYPE *loc);
+static pm_statements_node_t *pm_ystatements_ensure(struct parser_params *p, NODE *node);
+static pm_statements_node_t *pm_ystatements_opt(struct parser_params *p, NODE *body);
+static NODE *pm_yelse(struct parser_params *p, NODE *body, const YYLTYPE *else_loc, const YYLTYPE *loc);
+static NODE *pm_yarray_brackets(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
+static NODE *pm_ybegin_keywords(struct parser_params *p, NODE *node, const YYLTYPE *begin_loc, const YYLTYPE *end_loc);
+static NODE *pm_yparentheses(struct parser_params *p, NODE *body, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
 static rb_node_xstr_t *rb_node_xstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -1696,7 +1715,7 @@ static NODE *new_defined(struct parser_params *p, NODE *expr, const YYLTYPE *loc
 
 static NODE *new_regexp(struct parser_params *, NODE *, int, const YYLTYPE *, const YYLTYPE *, const YYLTYPE *, const YYLTYPE *);
 
-#define make_list(list, loc) ((list) ? (nd_set_loc(list, loc), list) : NEW_ZLIST(loc))
+#define make_list(list, loc) ((list) ? (((NODE *)(list))->location = pm_yloc(loc), (list)) : NEW_ZLIST(loc))
 
 static NODE *new_xstring(struct parser_params *, NODE *, const YYLTYPE *loc);
 
@@ -3363,7 +3382,11 @@ arg		: asgn(arg_rhs)
 ternary		: arg '?' arg '\n'? ':' arg
                     {
                         value_expr(p, $1);
-                        $$ = new_if(p, $1, $3, $6, &@$, &NULL_LOC, &@5, &NULL_LOC);
+                        {
+                            YYLTYPE else_loc = { @5.beg, @6.end };
+                            NODE *else_clause = pm_yelse(p, $6, &@5, &else_loc);
+                            $$ = new_if(p, $1, $3, else_clause, &@$, &NULL_LOC, &@2, &NULL_LOC);
+                        }
                         fixpos($$, $1);
                     }
                 ;
@@ -3650,19 +3673,16 @@ primary		: inline_primary
               k_end[k_end]
                 {
                     CMDARG_POP();
-                    YSTUB("grammar"); /* PORTME: set_line_body($body, @kw.end_pos.lineno); */
                     $$ = NEW_BEGIN($body, &@$);
-                    nd_set_line($$, @kw.end_pos.lineno);
+                    $$ = pm_ybegin_keywords(p, $$, &@kw, &@k_end);
                 }
             | tLPAREN_ARG compstmt(stmts)[body] {SET_LEX_STATE(EXPR_ENDARG);} ')'
                 {
-                    YSTUB("grammar"); /* PORTME: if (nd_type_p($body, NODE_SELF)) RNODE_SELF($body)->nd_state = 0; */
-                    $$ = $body;
+                    $$ = pm_yparentheses(p, $body, &@1, &@4, &@$);
                 }
             | tLPAREN compstmt(stmts)[body] ')'
                 {
-                    YSTUB("grammar"); /* PORTME: if (nd_type_p($body, NODE_SELF)) RNODE_SELF($body)->nd_state = 0; */
-                    $$ = NEW_BLOCK($body, &@$);
+                    $$ = pm_yparentheses(p, $body, &@1, &@3, &@$);
                 }
             | primary_value[recv] tCOLON2[op] tCONSTANT[name]
                 {
@@ -3675,6 +3695,7 @@ primary		: inline_primary
             | tLBRACK aref_args[args] ']'
                 {
                     $$ = make_list($args, &@$);
+                    $$ = pm_yarray_brackets(p, $$, &@1, &@3, &@$);
                 }
             | tLBRACE assoc_list[list] '}'
                 {
@@ -3727,9 +3748,6 @@ primary		: inline_primary
               if_tail[tail]
               k_end[k_end]
                 {
-                    if ($tail && nd_type_p($tail, NODE_IF))
-                        YSTUB("grammar"); /* PORTME: RNODE_IF($tail)->end_keyword_loc = @k_end; */
-
                     $$ = new_if(p, $cond, $body, $tail, &@$, &@kw, &@then, &@k_end);
                     fixpos($$, $cond);
                 }
@@ -3890,7 +3908,6 @@ primary		: inline_primary
             | defn_head[head]
               f_arglist[args]
                 {
-                    YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@head.beg_pos); */
                 }
               bodystmt
               k_end
@@ -3904,7 +3921,6 @@ primary		: inline_primary
             | defs_head[head]
               f_arglist[args]
                 {
-                    YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@head.beg_pos); */
                 }
               bodystmt
               k_end
@@ -3947,7 +3963,6 @@ primary_value	: value_expr(primary)
 k_begin		: keyword_begin
                     {
                         token_info_push(p, "begin", &@$);
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
                 ;
 
@@ -3965,14 +3980,12 @@ k_if		: keyword_if
                                 p->token_info->nonspc = 0;
                             }
                         }
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
                 ;
 
 k_unless	: keyword_unless
                     {
                         token_info_push(p, "unless", &@$);
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
                 ;
 
@@ -3980,7 +3993,6 @@ k_while		: keyword_while[kw] allow_exits
                     {
                         $$ = $allow_exits;
                         token_info_push(p, "while", &@$);
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@kw.beg_pos); */
                     }
                 ;
 
@@ -3988,14 +4000,12 @@ k_until		: keyword_until[kw] allow_exits
                     {
                         $$ = $allow_exits;
                         token_info_push(p, "until", &@$);
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@kw.beg_pos); */
                     }
                 ;
 
 k_case		: keyword_case
                     {
                         token_info_push(p, "case", &@$);
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
                 ;
 
@@ -4003,7 +4013,6 @@ k_for		: keyword_for[kw] allow_exits
                     {
                         $$ = $allow_exits;
                         token_info_push(p, "for", &@$);
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@kw.beg_pos); */
                     }
                 ;
 
@@ -4012,7 +4021,6 @@ k_class		: keyword_class
                         token_info_push(p, "class", &@$);
                         $$ = p->ctxt;
                         p->ctxt.in_rescue = before_rescue;
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
                 ;
 
@@ -4021,7 +4029,6 @@ k_module	: keyword_module
                         token_info_push(p, "module", &@$);
                         $$ = p->ctxt;
                         p->ctxt.in_rescue = before_rescue;
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
                 ;
 
@@ -4036,14 +4043,12 @@ k_def		: keyword_def
 k_do		: keyword_do
                     {
                         token_info_push(p, "do", &@$);
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
                 ;
 
 k_do_block	: keyword_do_block
                     {
                         token_info_push(p, "do", &@$);
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
                 ;
 
@@ -4121,7 +4126,7 @@ then		: term
                 ;
 
 do		: term
-                | keyword_do_cond { $$ = keyword_do_cond; }
+                | keyword_do_cond { $$ = keyword_do_cond; p->ydo.loc = @1; p->ydo.set = 1; }
                 ;
 
 if_tail		: opt_else
@@ -4137,7 +4142,7 @@ if_tail		: opt_else
 opt_else	: none
                 | k_else compstmt(stmts)
                     {
-                        $$ = $2;
+                        $$ = pm_yelse(p, $2, &@1, &@$);
                     }
                 ;
 
@@ -4337,7 +4342,6 @@ lambda_body	: tLAMBEG compstmt(stmts) '}'
                     }
                 | keyword_do_LAMBDA
                     {
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
                   bodystmt k_end
                     {
@@ -9529,13 +9533,6 @@ node_newnode(struct parser_params *p, enum node_type type, size_t size, size_t a
  * at this boundary so the grammar actions above stay upstream-shaped.
  */
 
-/* The byte-offset YYLTYPE as a prism location. */
-static inline pm_location_t
-pm_yloc(const YYLTYPE *loc)
-{
-    return (pm_location_t) { loc->beg, loc->end - loc->beg };
-}
-
 /*
  * Take ownership of a lexer-built string's bytes as a node-held pm_string_t:
  * copied into the arena the node lives in, which is the convention prism's
@@ -9740,6 +9737,80 @@ pm_yfcall_args(struct parser_params *p, NODE *node, NODE *args, const YYLTYPE *l
     return node;
 }
 
+/* Wrap a body (or NULL) for a node that wants an optional StatementsNode:
+ * unlike pm_ystatements_ensure, an absent body stays absent. */
+static pm_statements_node_t *
+pm_ystatements_opt(struct parser_params *p, NODE *body)
+{
+    return body == NULL ? NULL : pm_ystatements_ensure(p, body);
+}
+
+/* An else clause, built at the opt_else reduction, which is the last moment
+ * the `else` keyword's location exists; the enclosing if/unless/begin fills
+ * in the end keyword when it closes. */
+static NODE *
+pm_yelse(struct parser_params *p, NODE *body, const YYLTYPE *else_loc, const YYLTYPE *loc)
+{
+    return (NODE *) pm_else_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(else_loc), pm_ystatements_opt(p, body), (pm_location_t) { 0 });
+}
+
+/* Attach the brackets to an array literal, and fold the static-literal flag
+ * the way the hand-written parser does: an array of static literals is one. */
+static NODE *
+pm_yarray_brackets(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_ARRAY_NODE)) {
+        YSTUB("pm_yarray_brackets");
+        return node;
+    }
+
+    pm_array_node_t *array = (pm_array_node_t *) node;
+    array->opening_loc = pm_yloc(opening);
+    array->closing_loc = pm_yloc(closing);
+    array->base.location = pm_yloc(loc);
+
+    bool is_static = true;
+    for (size_t index = 0; index < array->elements.size; index++) {
+        pm_node_t *element = array->elements.nodes[index];
+        /* Containers do not count as static elements, matching prism. */
+        if (!PM_NODE_FLAG_P(element, PM_NODE_FLAG_STATIC_LITERAL) ||
+            PM_NODE_TYPE_P(element, PM_ARRAY_NODE) || PM_NODE_TYPE_P(element, PM_HASH_NODE)) {
+            is_static = false;
+            break;
+        }
+    }
+    if (is_static) array->base.flags |= PM_NODE_FLAG_STATIC_LITERAL;
+
+    return node;
+}
+
+/* A parenthesized expression: CRuby drops grouping parens (or marks a block),
+ * prism keeps them as a node. */
+static NODE *
+pm_yparentheses(struct parser_params *p, NODE *body, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc)
+{
+    pm_statements_node_t *statements = pm_ystatements_opt(p, body);
+    pm_node_flags_t flags = 0;
+    if (statements != NULL && statements->body.size > 1) flags = PM_PARENTHESES_NODE_FLAGS_MULTIPLE_STATEMENTS;
+    return (NODE *) pm_parentheses_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+        (pm_node_t *) statements, pm_yloc(opening), pm_yloc(closing));
+}
+
+/* Attach the keywords to a begin/end block once it closes. */
+static NODE *
+pm_ybegin_keywords(struct parser_params *p, NODE *node, const YYLTYPE *begin_loc, const YYLTYPE *end_loc)
+{
+    if (node != NULL && PM_NODE_TYPE_P(node, PM_BEGIN_NODE)) {
+        pm_begin_node_t *begin = (pm_begin_node_t *) node;
+        begin->begin_keyword_loc = pm_yloc(begin_loc);
+        begin->end_keyword_loc = pm_yloc(end_loc);
+    }
+    return node;
+}
+
 /* Set the message location on a call once the operator/message token is at
  * hand; the constructors do not receive it. */
 static NODE *
@@ -9780,6 +9851,7 @@ pm_ystatements_ensure(struct parser_params *p, NODE *node)
     }
 
     pm_node_list_t body = { 0 };
+    node->flags |= PM_NODE_FLAG_NEWLINE;
     pm_node_list_append(p->pm->arena, &body, node);
     return pm_statements_node_new(p->pm->arena, ++p->pm->node_id, 0, node->location, body);
 }
@@ -9858,8 +9930,10 @@ rb_node_retry_new(struct parser_params *p, const YYLTYPE *loc)
 static rb_node_begin_t *
 rb_node_begin_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_begin_new");
-    return NULL;
+    return (rb_node_begin_t *) pm_begin_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        (pm_location_t) { 0 }, pm_ystatements_opt(p, nd_body),
+        NULL, NULL, NULL, (pm_location_t) { 0 });
 }
 
 static rb_node_rescue_t *
@@ -9886,15 +9960,17 @@ rb_node_ensure_new(struct parser_params *p, NODE *nd_head, NODE *nd_ensr, const 
 static rb_node_and_t *
 rb_node_and_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYPE *loc, const YYLTYPE *operator_loc)
 {
-    YSTUB("rb_node_and_new");
-    return NULL;
+    return (rb_node_and_t *) pm_and_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        nd_1st, nd_2nd, pm_yloc(operator_loc));
 }
 
 static rb_node_or_t *
 rb_node_or_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYPE *loc, const YYLTYPE *operator_loc)
 {
-    YSTUB("rb_node_or_new");
-    return NULL;
+    return (rb_node_or_t *) pm_or_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        nd_1st, nd_2nd, pm_yloc(operator_loc));
 }
 
 static rb_node_return_t *
@@ -9914,15 +9990,56 @@ rb_node_yield_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc, co
 static rb_node_if_t *
 rb_node_if_new(struct parser_params *p, NODE *nd_cond, NODE *nd_body, NODE *nd_else, const YYLTYPE *loc, const YYLTYPE* if_keyword_loc, const YYLTYPE* then_keyword_loc, const YYLTYPE* end_keyword_loc)
 {
-    YSTUB("rb_node_if_new");
-    return NULL;
+    pm_node_t *subsequent = nd_else;
+    pm_location_t end_keyword = pm_yloc(end_keyword_loc);
+    for (pm_node_t *chain = subsequent; chain != NULL;) {
+        if (end_keyword.length > 0) {
+            uint32_t end = end_keyword.start + end_keyword.length;
+            if (end > chain->location.start + chain->location.length) {
+                chain->location.length = end - chain->location.start;
+            }
+        }
+        if (PM_NODE_TYPE_P(chain, PM_ELSE_NODE)) {
+            ((pm_else_node_t *) chain)->end_keyword_loc = end_keyword;
+            break;
+        }
+        else if (PM_NODE_TYPE_P(chain, PM_IF_NODE)) {
+            pm_if_node_t *nested = (pm_if_node_t *) chain;
+            nested->end_keyword_loc = end_keyword;
+            chain = nested->subsequent;
+        }
+        else {
+            break;
+        }
+    }
+    return (rb_node_if_t *) pm_if_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(if_keyword_loc), nd_cond, pm_yloc(then_keyword_loc),
+        pm_ystatements_opt(p, nd_body), subsequent, end_keyword);
 }
 
 static rb_node_unless_t *
 rb_node_unless_new(struct parser_params *p, NODE *nd_cond, NODE *nd_body, NODE *nd_else, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *then_keyword_loc, const YYLTYPE *end_keyword_loc)
 {
-    YSTUB("rb_node_unless_new");
-    return NULL;
+    pm_else_node_t *else_clause = NULL;
+    pm_location_t end_keyword = pm_yloc(end_keyword_loc);
+    if (nd_else != NULL && PM_NODE_TYPE_P(nd_else, PM_ELSE_NODE)) {
+        else_clause = (pm_else_node_t *) nd_else;
+        else_clause->end_keyword_loc = end_keyword;
+        if (end_keyword.length > 0) {
+            uint32_t end = end_keyword.start + end_keyword.length;
+            if (end > else_clause->base.location.start + else_clause->base.location.length) {
+                else_clause->base.location.length = end - else_clause->base.location.start;
+            }
+        }
+    }
+    else if (nd_else != NULL) {
+        YSTUB("rb_node_unless_new");
+    }
+    return (rb_node_unless_t *) pm_unless_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(keyword_loc), nd_cond, pm_yloc(then_keyword_loc),
+        pm_ystatements_opt(p, nd_body), else_clause, end_keyword);
 }
 
 static rb_node_class_t *
@@ -9998,15 +10115,25 @@ rb_node_in_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, NODE *nd_n
 static rb_node_while_t *
 rb_node_while_new(struct parser_params *p, NODE *nd_cond, NODE *nd_body, long nd_state, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *closing_loc)
 {
-    YSTUB("rb_node_while_new");
-    return NULL;
+    pm_node_flags_t flags = nd_state == 0 ? PM_LOOP_FLAGS_BEGIN_MODIFIER : 0;
+    pm_location_t do_loc = { 0 };
+    if (p->ydo.set) { do_loc = pm_yloc(&p->ydo.loc); p->ydo.set = 0; }
+    return (rb_node_while_t *) pm_while_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+        pm_yloc(keyword_loc), do_loc, pm_yloc(closing_loc),
+        nd_cond, pm_ystatements_opt(p, nd_body));
 }
 
 static rb_node_until_t *
 rb_node_until_new(struct parser_params *p, NODE *nd_cond, NODE *nd_body, long nd_state, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *closing_loc)
 {
-    YSTUB("rb_node_until_new");
-    return NULL;
+    pm_node_flags_t flags = nd_state == 0 ? PM_LOOP_FLAGS_BEGIN_MODIFIER : 0;
+    pm_location_t do_loc = { 0 };
+    if (p->ydo.set) { do_loc = pm_yloc(&p->ydo.loc); p->ydo.set = 0; }
+    return (rb_node_until_t *) pm_until_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+        pm_yloc(keyword_loc), do_loc, pm_yloc(closing_loc),
+        nd_cond, pm_ystatements_opt(p, nd_body));
 }
 
 static rb_node_colon2_t *
@@ -10110,8 +10237,9 @@ rb_node_list_new2(struct parser_params *p, NODE *nd_head, long nd_alen, NODE *nd
 static rb_node_zlist_t *
 rb_node_zlist_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_zlist_new");
-    return NULL;
+    return (rb_node_zlist_t *) pm_array_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        (pm_node_list_t) { 0 }, (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static rb_node_hash_t *
@@ -11471,15 +11599,17 @@ new_nil_at(struct parser_params *p, const rb_code_position_t *pos)
 static NODE*
 new_if(struct parser_params *p, NODE *cc, NODE *left, NODE *right, const YYLTYPE *loc, const YYLTYPE* if_keyword_loc, const YYLTYPE* then_keyword_loc, const YYLTYPE* end_keyword_loc)
 {
-    YSTUB("new_if");
-    return NULL;
+    if (!cc) return right;
+    cc = cond(p, cc, loc);
+    return newline_node(NEW_IF(cc, left, right, loc, if_keyword_loc, then_keyword_loc, end_keyword_loc));
 }
 
 static NODE*
 new_unless(struct parser_params *p, NODE *cc, NODE *left, NODE *right, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *then_keyword_loc, const YYLTYPE *end_keyword_loc)
 {
-    YSTUB("new_unless");
-    return NULL;
+    if (!cc) return right;
+    cc = cond(p, cc, loc);
+    return newline_node(NEW_UNLESS(cc, left, right, loc, keyword_loc, then_keyword_loc, end_keyword_loc));
 }
 
 #define NEW_AND_OR(type, f, s, loc, op_loc) (type == NODE_AND ? NEW_AND(f,s,loc,op_loc) : NEW_OR(f,s,loc,op_loc))
@@ -11488,8 +11618,12 @@ static NODE*
 logop(struct parser_params *p, ID id, NODE *left, NODE *right,
           const YYLTYPE *op_loc, const YYLTYPE *loc)
 {
-    YSTUB("logop");
-    return NULL;
+    bool is_and = (id == idAND || id == idANDOP);
+    value_expr(p, left);
+
+    /* CRuby rebuilds `a and b and c` to nest rightward for its compiler;
+     * prism keeps the grammar's left association, so no rebuild here. */
+    return is_and ? (NODE *) NEW_AND(left, right, loc, op_loc) : (NODE *) NEW_OR(left, right, loc, op_loc);
 }
 
 #undef NEW_AND_OR

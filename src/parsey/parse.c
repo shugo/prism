@@ -164,6 +164,13 @@ typedef struct {
  * pointers into the source, which is what lex.pbeg/.pcur/.pend are. */
 #define YOFF(ptr) ((uint32_t) ((const uint8_t *) (ptr) - p->pm->start))
 
+/* The byte-offset YYLTYPE as a prism location. */
+static inline pm_location_t
+pm_yloc(const pm_yloc_t *loc)
+{
+    return (pm_location_t) { loc->beg, loc->end - loc->beg };
+}
+
 /* The handful of places that still mention VALUE are all in code that is
  * stubbed out pending its port; the typedef keeps their signatures compiling
  * and nothing else. */
@@ -982,6 +989,12 @@ struct parser_params {
         YYLTYPE closing;
         unsigned int set: 1;
     } yparens;
+
+    /* fork: the `do` of the expr_value_do just reduced, for while/until. */
+    struct {
+        YYLTYPE loc;
+        unsigned int set: 1;
+    } ydo;
     int tokidx;
     int toksiz;
     int heredoc_end;
@@ -1400,6 +1413,12 @@ static rb_node_str_t *rb_node_str_new(struct parser_params *p, rb_parser_string_
 static NODE *string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static void pm_yparens_set(struct parser_params *p, const YYLTYPE *opening, const YYLTYPE *closing);
 static NODE *pm_yfcall_args(struct parser_params *p, NODE *node, NODE *args, const YYLTYPE *loc);
+static pm_statements_node_t *pm_ystatements_ensure(struct parser_params *p, NODE *node);
+static pm_statements_node_t *pm_ystatements_opt(struct parser_params *p, NODE *body);
+static NODE *pm_yelse(struct parser_params *p, NODE *body, const YYLTYPE *else_loc, const YYLTYPE *loc);
+static NODE *pm_yarray_brackets(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
+static NODE *pm_ybegin_keywords(struct parser_params *p, NODE *node, const YYLTYPE *begin_loc, const YYLTYPE *end_loc);
+static NODE *pm_yparentheses(struct parser_params *p, NODE *body, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
 static rb_node_xstr_t *rb_node_xstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -1720,7 +1739,7 @@ static NODE *new_defined(struct parser_params *p, NODE *expr, const YYLTYPE *loc
 
 static NODE *new_regexp(struct parser_params *, NODE *, int, const YYLTYPE *, const YYLTYPE *, const YYLTYPE *, const YYLTYPE *);
 
-#define make_list(list, loc) ((list) ? (nd_set_loc(list, loc), list) : NEW_ZLIST(loc))
+#define make_list(list, loc) ((list) ? (((NODE *)(list))->location = pm_yloc(loc), (list)) : NEW_ZLIST(loc))
 
 static NODE *new_xstring(struct parser_params *, NODE *, const YYLTYPE *loc);
 
@@ -2130,7 +2149,7 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
 }
 
 
-#line 2134 "parse.c"
+#line 2153 "parse.c"
 
 # ifndef YY_CAST
 #  ifdef __cplusplus
@@ -3041,92 +3060,92 @@ static const yytype_uint8 yytranslate[] =
 /* YYRLINE[YYN] -- Source line where rule number YYN was defined.  */
 static const yytype_int16 yyrline[] =
 {
-       0,  2589,  2583,  2589,  2589,  2589,  2589,  2608,  2612,  2616,
-    2622,  2627,  2633,  2635,  2652,  2648,  2653,  2652,  2663,  2660,
-    2672,  2676,  2680,  2686,  2688,  2687,  2697,  2699,  2708,  2708,
-    2712,  2716,  2723,  2729,  2735,  2740,  2745,  2755,  2765,  2773,
-    2784,  2785,  2789,  2789,  2790,  2800,  2804,  2805,  2812,  2812,
-    2813,  2813,  2813,  2813,  2813,  2813,  2813,  2813,  2813,  2814,
-    2814,  2814,  2817,  2818,  2823,  2823,  2823,  2829,  2830,  2836,
-    2839,  2840,  2844,  2848,  2852,  2857,  2856,  2871,  2870,  2884,
-    2887,  2898,  2907,  2906,  2919,  2919,  2920,  2926,  2926,  2926,
-    2932,  2933,  2936,  2936,  2939,  2940,  2946,  2953,  2953,  2953,
-    2959,  2963,  2971,  2975,  2979,  2983,  2987,  2992,  2997,  3002,
-    3006,  3012,  3020,  3021,  3027,  3028,  3034,  3038,  3042,  3046,
-    3046,  3046,  3050,  3054,  3058,  3062,  3066,  3070,  3076,  3077,
-    3083,  3087,  3094,  3094,  3098,  3102,  3102,  3107,  3111,  3115,
-    3119,  3126,  3126,  3130,  3134,  3134,  3138,  3142,  3146,  3150,
-    3157,  3162,  3165,  3169,  3173,  3179,  3179,  3179,  3180,  3185,
-    3188,  3192,  3195,  3199,  3199,  3206,  3207,  3208,  3209,  3210,
-    3211,  3212,  3213,  3214,  3215,  3216,  3217,  3218,  3219,  3220,
-    3221,  3222,  3223,  3224,  3225,  3226,  3227,  3228,  3229,  3230,
-    3231,  3232,  3233,  3234,  3235,  3238,  3238,  3238,  3239,  3239,
-    3240,  3240,  3240,  3241,  3241,  3241,  3241,  3242,  3242,  3242,
-    3242,  3243,  3243,  3243,  3244,  3244,  3244,  3244,  3245,  3245,
-    3245,  3245,  3246,  3246,  3246,  3246,  3247,  3247,  3247,  3247,
-    3248,  3248,  3248,  3248,  3249,  3249,  3252,  3252,  3253,  3253,
-    3253,  3253,  3253,  3253,  3253,  3253,  3253,  3254,  3254,  3254,
-    3254,  3254,  3254,  3254,  3255,  3259,  3263,  3267,  3271,  3275,
-    3279,  3283,  3287,  3291,  3295,  3299,  3303,  3307,  3308,  3312,
-    3316,  3320,  3324,  3328,  3332,  3336,  3340,  3344,  3348,  3352,
-    3358,  3358,  3358,  3359,  3360,  3363,  3371,  3372,  3377,  3383,
-    3384,  3385,  3386,  3389,  3393,  3400,  3406,  3413,  3420,  3420,
-    3423,  3424,  3425,  3429,  3435,  3440,  3448,  3453,  3462,  3473,
-    3474,  3480,  3481,  3482,  3483,  3487,  3493,  3493,  3497,  3501,
-    3505,  3510,  3515,  3518,  3518,  3555,  3559,  3566,  3570,  3577,
-    3581,  3585,  3589,  3596,  3600,  3608,  3609,  3613,  3617,  3621,
-    3638,  3638,  3638,  3638,  3638,  3638,  3638,  3638,  3639,  3640,
-    3641,  3646,  3645,  3657,  3657,  3662,  3667,  3671,  3675,  3679,
-    3684,  3688,  3692,  3696,  3700,  3706,  3710,  3714,  3718,  3719,
-    3724,  3726,  3737,  3745,  3753,  3761,  3760,  3774,  3773,  3785,
-    3792,  3792,  3793,  3836,  3835,  3857,  3856,  3875,  3874,  3892,
-    3890,  3906,  3904,  3918,  3922,  3926,  3930,  3944,  3944,  3947,
-    3954,  3972,  3979,  3987,  3995,  4002,  4010,  4019,  4028,  4036,
-    4043,  4050,  4058,  4065,  4071,  4086,  4093,  4098,  4104,  4111,
-    4118,  4119,  4120,  4123,  4124,  4127,  4129,  4137,  4138,  4144,
-    4145,  4148,  4153,  4160,  4160,  4160,  4164,  4168,  4172,  4176,
-    4182,  4187,  4193,  4194,  4200,  4200,  4202,  4202,  4202,  4202,
-    4202,  4202,  4202,  4202,  4202,  4202,  4202,  4205,  4212,  4212,
-    4212,  4212,  4212,  4212,  4212,  4212,  4212,  4212,  4212,  4212,
-    4212,  4212,  4212,  4212,  4212,  4212,  4213,  4218,  4222,  4222,
-    4225,  4226,  4232,  4241,  4244,  4247,  4251,  4257,  4258,  4261,
-    4265,  4268,  4274,  4279,  4286,  4292,  4285,  4318,  4324,  4333,
-    4339,  4338,  4348,  4355,  4360,  4368,  4373,  4377,  4384,  4388,
-    4397,  4402,  4406,  4411,  4420,  4424,  4431,  4436,  4443,  4445,
-    4459,  4459,  4479,  4484,  4488,  4493,  4500,  4508,  4509,  4512,
-    4513,  4515,  4528,  4535,  4542,  4543,  4546,  4547,  4552,  4559,
-    4560,  4565,  4570,  4574,  4578,  4584,  4587,  4593,  4597,  4596,
-    4608,  4611,  4617,  4623,  4624,  4625,  4631,  4637,  4643,  4648,
-    4654,  4660,  4666,  4671,  4675,  4679,  4685,  4684,  4694,  4699,
-    4706,  4711,  4715,  4719,  4723,  4727,  4730,  4731,  4737,  4741,
-    4747,  4754,  4759,  4765,  4766,  4772,  4778,  4782,  4786,  4790,
-    4796,  4797,  4803,  4808,  4819,  4820,  4834,  4838,  4844,  4850,
-    4851,  4857,  4858,  4858,  4858,  4858,  4858,  4858,  4858,  4859,
-    4860,  4861,  4864,  4864,  4864,  4864,  4864,  4864,  4864,  4864,
-    4865,  4869,  4872,  4879,  4890,  4896,  4902,  4906,  4910,  4917,
-    4936,  4939,  4943,  4947,  4950,  4954,  4957,  4963,  4966,  4967,
-    4970,  4981,  4982,  4983,  4989,  4999,  5008,  5014,  5014,  5014,
-    5014,  5018,  5021,  5027,  5028,  5034,  5034,  5038,  5041,  5047,
-    5047,  5050,  5050,  5054,  5057,  5064,  5067,  5074,  5077,  5084,
-    5087,  5094,  5097,  5122,  5124,  5123,  5137,  5145,  5149,  5153,
-    5157,  5172,  5173,  5176,  5180,  5183,  5184,  5187,  5202,  5203,
-    5206,  5213,  5214,  5221,  5222,  5223,  5224,  5227,  5228,  5229,
-    5232,  5232,  5233,  5236,  5237,  5238,  5239,  5240,  5241,  5242,
-    5245,  5253,  5259,  5259,  5265,  5266,  5270,  5269,  5278,  5281,
-    5282,  5289,  5295,  5304,  5305,  5305,  5321,  5321,  5321,  5321,
-    5321,  5321,  5321,  5321,  5321,  5321,  5321,  5322,  5330,  5330,
-    5330,  5330,  5330,  5331,  5407,  5407,  5407,  5407,  5407,  5407,
-    5407,  5407,  5407,  5407,  5407,  5407,  5407,  5407,  5407,  5407,
-    5407,  5407,  5407,  5407,  5407,  5407,  5407,  5410,  5410,  5410,
-    5410,  5410,  5410,  5410,  5410,  5410,  5410,  5410,  5410,  5410,
-    5410,  5410,  5410,  5410,  5410,  5410,  5410,  5413,  5419,  5425,
-    5431,  5437,  5445,  5446,  5455,  5462,  5466,  5484,  5485,  5495,
-    5513,  5514,  5517,  5522,  5527,  5534,  5535,  5538,  5543,  5550,
-    5551,  5554,  5559,  5563,  5570,  5570,  5570,  5577,  5577,  5607,
-    5609,  5608,  5620,  5621,  5627,  5628,  5645,  5649,  5653,  5659,
-    5664,  5668,  5680,  5680,  5680,  5681,  5684,  5685,  5686,  5689,
-    5690,  5693,  5694,  5697,  5698,  5701,  5704,  5707,  5710,  5711,
-    5714,  5722,  5729,  5730,  5734
+       0,  2608,  2602,  2608,  2608,  2608,  2608,  2627,  2631,  2635,
+    2641,  2646,  2652,  2654,  2671,  2667,  2672,  2671,  2682,  2679,
+    2691,  2695,  2699,  2705,  2707,  2706,  2716,  2718,  2727,  2727,
+    2731,  2735,  2742,  2748,  2754,  2759,  2764,  2774,  2784,  2792,
+    2803,  2804,  2808,  2808,  2809,  2819,  2823,  2824,  2831,  2831,
+    2832,  2832,  2832,  2832,  2832,  2832,  2832,  2832,  2832,  2833,
+    2833,  2833,  2836,  2837,  2842,  2842,  2842,  2848,  2849,  2855,
+    2858,  2859,  2863,  2867,  2871,  2876,  2875,  2890,  2889,  2903,
+    2906,  2917,  2926,  2925,  2938,  2938,  2939,  2945,  2945,  2945,
+    2951,  2952,  2955,  2955,  2958,  2959,  2965,  2972,  2972,  2972,
+    2978,  2982,  2990,  2994,  2998,  3002,  3006,  3011,  3016,  3021,
+    3025,  3031,  3039,  3040,  3046,  3047,  3053,  3057,  3061,  3065,
+    3065,  3065,  3069,  3073,  3077,  3081,  3085,  3089,  3095,  3096,
+    3102,  3106,  3113,  3113,  3117,  3121,  3121,  3126,  3130,  3134,
+    3138,  3145,  3145,  3149,  3153,  3153,  3157,  3161,  3165,  3169,
+    3176,  3181,  3184,  3188,  3192,  3198,  3198,  3198,  3199,  3204,
+    3207,  3211,  3214,  3218,  3218,  3225,  3226,  3227,  3228,  3229,
+    3230,  3231,  3232,  3233,  3234,  3235,  3236,  3237,  3238,  3239,
+    3240,  3241,  3242,  3243,  3244,  3245,  3246,  3247,  3248,  3249,
+    3250,  3251,  3252,  3253,  3254,  3257,  3257,  3257,  3258,  3258,
+    3259,  3259,  3259,  3260,  3260,  3260,  3260,  3261,  3261,  3261,
+    3261,  3262,  3262,  3262,  3263,  3263,  3263,  3263,  3264,  3264,
+    3264,  3264,  3265,  3265,  3265,  3265,  3266,  3266,  3266,  3266,
+    3267,  3267,  3267,  3267,  3268,  3268,  3271,  3271,  3272,  3272,
+    3272,  3272,  3272,  3272,  3272,  3272,  3272,  3273,  3273,  3273,
+    3273,  3273,  3273,  3273,  3274,  3278,  3282,  3286,  3290,  3294,
+    3298,  3302,  3306,  3310,  3314,  3318,  3322,  3326,  3327,  3331,
+    3335,  3339,  3343,  3347,  3351,  3355,  3359,  3363,  3367,  3371,
+    3377,  3377,  3377,  3378,  3379,  3382,  3394,  3395,  3400,  3406,
+    3407,  3408,  3409,  3412,  3416,  3423,  3429,  3436,  3443,  3443,
+    3446,  3447,  3448,  3452,  3458,  3463,  3471,  3476,  3485,  3496,
+    3497,  3503,  3504,  3505,  3506,  3510,  3516,  3516,  3520,  3524,
+    3528,  3533,  3538,  3541,  3541,  3578,  3582,  3589,  3593,  3600,
+    3604,  3608,  3612,  3619,  3623,  3631,  3632,  3636,  3640,  3644,
+    3661,  3661,  3661,  3661,  3661,  3661,  3661,  3661,  3662,  3663,
+    3664,  3669,  3668,  3679,  3679,  3683,  3687,  3691,  3695,  3700,
+    3705,  3709,  3713,  3717,  3721,  3727,  3731,  3735,  3739,  3740,
+    3745,  3747,  3755,  3763,  3771,  3779,  3778,  3792,  3791,  3803,
+    3810,  3810,  3811,  3854,  3853,  3875,  3874,  3893,  3892,  3910,
+    3908,  3923,  3921,  3934,  3938,  3942,  3946,  3960,  3960,  3963,
+    3969,  3986,  3992,  3999,  4006,  4012,  4019,  4027,  4035,  4043,
+    4049,  4055,  4063,  4070,  4076,  4091,  4098,  4103,  4109,  4116,
+    4123,  4124,  4125,  4128,  4129,  4132,  4134,  4142,  4143,  4149,
+    4150,  4153,  4158,  4165,  4165,  4165,  4169,  4173,  4177,  4181,
+    4187,  4192,  4198,  4199,  4205,  4205,  4207,  4207,  4207,  4207,
+    4207,  4207,  4207,  4207,  4207,  4207,  4207,  4210,  4217,  4217,
+    4217,  4217,  4217,  4217,  4217,  4217,  4217,  4217,  4217,  4217,
+    4217,  4217,  4217,  4217,  4217,  4217,  4218,  4223,  4227,  4227,
+    4230,  4231,  4237,  4246,  4249,  4252,  4256,  4262,  4263,  4266,
+    4270,  4273,  4279,  4284,  4291,  4297,  4290,  4323,  4329,  4338,
+    4344,  4343,  4352,  4359,  4364,  4372,  4377,  4381,  4388,  4392,
+    4401,  4406,  4410,  4415,  4424,  4428,  4435,  4440,  4447,  4449,
+    4463,  4463,  4483,  4488,  4492,  4497,  4504,  4512,  4513,  4516,
+    4517,  4519,  4532,  4539,  4546,  4547,  4550,  4551,  4556,  4563,
+    4564,  4569,  4574,  4578,  4582,  4588,  4591,  4597,  4601,  4600,
+    4612,  4615,  4621,  4627,  4628,  4629,  4635,  4641,  4647,  4652,
+    4658,  4664,  4670,  4675,  4679,  4683,  4689,  4688,  4698,  4703,
+    4710,  4715,  4719,  4723,  4727,  4731,  4734,  4735,  4741,  4745,
+    4751,  4758,  4763,  4769,  4770,  4776,  4782,  4786,  4790,  4794,
+    4800,  4801,  4807,  4812,  4823,  4824,  4838,  4842,  4848,  4854,
+    4855,  4861,  4862,  4862,  4862,  4862,  4862,  4862,  4862,  4863,
+    4864,  4865,  4868,  4868,  4868,  4868,  4868,  4868,  4868,  4868,
+    4869,  4873,  4876,  4883,  4894,  4900,  4906,  4910,  4914,  4921,
+    4940,  4943,  4947,  4951,  4954,  4958,  4961,  4967,  4970,  4971,
+    4974,  4985,  4986,  4987,  4993,  5003,  5012,  5018,  5018,  5018,
+    5018,  5022,  5025,  5031,  5032,  5038,  5038,  5042,  5045,  5051,
+    5051,  5054,  5054,  5058,  5061,  5068,  5071,  5078,  5081,  5088,
+    5091,  5098,  5101,  5126,  5128,  5127,  5141,  5149,  5153,  5157,
+    5161,  5176,  5177,  5180,  5184,  5187,  5188,  5191,  5206,  5207,
+    5210,  5217,  5218,  5225,  5226,  5227,  5228,  5231,  5232,  5233,
+    5236,  5236,  5237,  5240,  5241,  5242,  5243,  5244,  5245,  5246,
+    5249,  5257,  5263,  5263,  5269,  5270,  5274,  5273,  5282,  5285,
+    5286,  5293,  5299,  5308,  5309,  5309,  5325,  5325,  5325,  5325,
+    5325,  5325,  5325,  5325,  5325,  5325,  5325,  5326,  5334,  5334,
+    5334,  5334,  5334,  5335,  5411,  5411,  5411,  5411,  5411,  5411,
+    5411,  5411,  5411,  5411,  5411,  5411,  5411,  5411,  5411,  5411,
+    5411,  5411,  5411,  5411,  5411,  5411,  5411,  5414,  5414,  5414,
+    5414,  5414,  5414,  5414,  5414,  5414,  5414,  5414,  5414,  5414,
+    5414,  5414,  5414,  5414,  5414,  5414,  5414,  5417,  5423,  5429,
+    5435,  5441,  5449,  5450,  5459,  5466,  5470,  5488,  5489,  5499,
+    5517,  5518,  5521,  5526,  5531,  5538,  5539,  5542,  5547,  5554,
+    5555,  5558,  5563,  5567,  5574,  5574,  5574,  5581,  5581,  5611,
+    5613,  5612,  5624,  5625,  5631,  5632,  5649,  5653,  5657,  5663,
+    5668,  5672,  5684,  5684,  5684,  5685,  5688,  5689,  5690,  5693,
+    5694,  5697,  5698,  5701,  5702,  5705,  5708,  5711,  5714,  5715,
+    5718,  5726,  5733,  5734,  5738
 };
 #endif
 
@@ -7960,12 +7979,12 @@ YYLTYPE yylloc = yyloc_default;
 
 
         /* User initialization code.  */
-#line 2118 "parse.y"
+#line 2137 "parse.y"
         {
     RUBY_SET_YYLLOC_OF_NONE(yylloc);
 }
 
-#line 7969 "parse.c"
+#line 7988 "parse.c"
 
   yylsp[0] = yylloc;
   goto yysetstate;
@@ -8178,26 +8197,26 @@ yyreduce:
   switch (yyn)
     {
   case 2: /* $@1: %empty  */
-#line 2583 "parse.y"
+#line 2602 "parse.y"
             {
                         SET_LEX_STATE(EXPR_BEG);
                         local_push(p, ifndef_ripper(1)+0);
                         /* jumps are possible in the top-level loop. */
                         if (!ifndef_ripper(p->do_loop) + 0) init_block_exit(p);
                     }
-#line 8189 "parse.c"
+#line 8208 "parse.c"
     break;
 
   case 5: /* compstmt_top_stmts: top_stmts option_terms  */
-#line 2424 "parse.y"
+#line 2443 "parse.y"
                         {
                             void_stmts(p, (yyval.node) = (yyvsp[-1].node));
                         }
-#line 8197 "parse.c"
+#line 8216 "parse.c"
     break;
 
   case 6: /* program: $@1 compstmt_top_stmts  */
-#line 2590 "parse.y"
+#line 2609 "parse.y"
                     {
                         if ((yyvsp[0].node) && !compile_for_eval) {
                             NODE *node = (yyvsp[0].node);
@@ -8214,164 +8233,164 @@ yyreduce:
                         p->eval_tree = NEW_SCOPE(0, block_append(p, p->eval_tree, (yyvsp[0].node)), NULL, &(yyloc));
                         local_pop(p);
                     }
-#line 8218 "parse.c"
+#line 8237 "parse.c"
     break;
 
   case 7: /* top_stmts: none  */
-#line 2609 "parse.y"
+#line 2628 "parse.y"
                     {
                         (yyval.node) = NEW_BEGIN(0, &(yyloc));
                     }
-#line 8226 "parse.c"
+#line 8245 "parse.c"
     break;
 
   case 8: /* top_stmts: top_stmt  */
-#line 2613 "parse.y"
+#line 2632 "parse.y"
                     {
                         (yyval.node) = newline_node((yyvsp[0].node));
                     }
-#line 8234 "parse.c"
+#line 8253 "parse.c"
     break;
 
   case 9: /* top_stmts: top_stmts terms top_stmt  */
-#line 2617 "parse.y"
+#line 2636 "parse.y"
                     {
                         (yyval.node) = block_append(p, (yyvsp[-2].node), newline_node((yyvsp[0].node)));
                     }
-#line 8242 "parse.c"
+#line 8261 "parse.c"
     break;
 
   case 10: /* top_stmt: stmt  */
-#line 2623 "parse.y"
+#line 2642 "parse.y"
                     {
                         clear_block_exit(p, true);
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 8251 "parse.c"
+#line 8270 "parse.c"
     break;
 
   case 11: /* top_stmt: "'BEGIN'" begin_block  */
-#line 2628 "parse.y"
+#line 2647 "parse.y"
                     {
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 8259 "parse.c"
+#line 8278 "parse.c"
     break;
 
   case 12: /* block_open: '{'  */
-#line 2633 "parse.y"
+#line 2652 "parse.y"
                  {(yyval.node_exits) = init_block_exit(p);}
-#line 8265 "parse.c"
+#line 8284 "parse.c"
     break;
 
   case 13: /* begin_block: block_open compstmt_top_stmts '}'  */
-#line 2636 "parse.y"
+#line 2655 "parse.y"
                     {
                         restore_block_exit(p, (yyvsp[-2].node_exits));
                         p->eval_tree_begin = block_append(p, p->eval_tree_begin,
                                                           NEW_BEGIN((yyvsp[-1].node), &(yyloc)));
                         (yyval.node) = NEW_BEGIN(0, &(yyloc));
                     }
-#line 8276 "parse.c"
+#line 8295 "parse.c"
     break;
 
   case 14: /* compstmt_stmts: stmts option_terms  */
-#line 2424 "parse.y"
+#line 2443 "parse.y"
                         {
                             void_stmts(p, (yyval.node) = (yyvsp[-1].node));
                         }
-#line 8284 "parse.c"
+#line 8303 "parse.c"
     break;
 
   case 15: /* $@2: %empty  */
-#line 2648 "parse.y"
+#line 2667 "parse.y"
                     {
                         if (!(yyvsp[-1].node)) yyerror1(&(yylsp[0]), "else without rescue is useless");
                         next_rescue_context(&p->ctxt, &(yyvsp[-2].ctxt), after_else);
                     }
-#line 8293 "parse.c"
+#line 8312 "parse.c"
     break;
 
   case 16: /* $@3: %empty  */
-#line 2653 "parse.y"
+#line 2672 "parse.y"
                     {
                         next_rescue_context(&p->ctxt, &(yyvsp[-4].ctxt), after_ensure);
                     }
-#line 8301 "parse.c"
+#line 8320 "parse.c"
     break;
 
   case 17: /* bodystmt: compstmt_stmts lex_ctxt opt_rescue k_else $@2 compstmt_stmts $@3 opt_ensure  */
-#line 2657 "parse.y"
+#line 2676 "parse.y"
                     {
                         (yyval.node) = new_bodystmt(p, (yyvsp[-7].node), (yyvsp[-5].node), (yyvsp[-2].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 8309 "parse.c"
+#line 8328 "parse.c"
     break;
 
   case 18: /* $@4: %empty  */
-#line 2663 "parse.y"
+#line 2682 "parse.y"
                     {
                         next_rescue_context(&p->ctxt, &(yyvsp[-1].ctxt), after_ensure);
                     }
-#line 8317 "parse.c"
+#line 8336 "parse.c"
     break;
 
   case 19: /* bodystmt: compstmt_stmts lex_ctxt opt_rescue $@4 opt_ensure  */
-#line 2667 "parse.y"
+#line 2686 "parse.y"
                     {
                         (yyval.node) = new_bodystmt(p, (yyvsp[-4].node), (yyvsp[-2].node), 0, (yyvsp[0].node), &(yyloc));
                     }
-#line 8325 "parse.c"
+#line 8344 "parse.c"
     break;
 
   case 20: /* stmts: none  */
-#line 2673 "parse.y"
+#line 2692 "parse.y"
                     {
                         (yyval.node) = NEW_BEGIN(0, &(yyloc));
                     }
-#line 8333 "parse.c"
+#line 8352 "parse.c"
     break;
 
   case 21: /* stmts: stmt_or_begin  */
-#line 2677 "parse.y"
+#line 2696 "parse.y"
                     {
                         (yyval.node) = newline_node((yyvsp[0].node));
                     }
-#line 8341 "parse.c"
+#line 8360 "parse.c"
     break;
 
   case 22: /* stmts: stmts terms stmt_or_begin  */
-#line 2681 "parse.y"
+#line 2700 "parse.y"
                     {
                         (yyval.node) = block_append(p, (yyvsp[-2].node), newline_node((yyvsp[0].node)));
                     }
-#line 8349 "parse.c"
+#line 8368 "parse.c"
     break;
 
   case 24: /* $@5: %empty  */
-#line 2688 "parse.y"
+#line 2707 "parse.y"
                     {
                         yyerror1(&(yylsp[0]), "BEGIN is permitted only at toplevel");
                     }
-#line 8357 "parse.c"
+#line 8376 "parse.c"
     break;
 
   case 25: /* stmt_or_begin: "'BEGIN'" $@5 begin_block  */
-#line 2692 "parse.y"
+#line 2711 "parse.y"
                     {
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 8365 "parse.c"
+#line 8384 "parse.c"
     break;
 
   case 26: /* allow_exits: %empty  */
-#line 2697 "parse.y"
+#line 2716 "parse.y"
               {(yyval.node_exits) = allow_block_exit(p);}
-#line 8371 "parse.c"
+#line 8390 "parse.c"
     break;
 
   case 27: /* k_END: "'END'" lex_ctxt  */
-#line 2700 "parse.y"
+#line 2719 "parse.y"
                     {
                         if (p->ctxt.in_def) {
                             rb_warn0("END in method; use at_exit");
@@ -8379,82 +8398,82 @@ yyreduce:
                         (yyval.ctxt) = (yyvsp[0].ctxt);
                         p->ctxt.in_rescue = before_rescue;
                     }
-#line 8383 "parse.c"
+#line 8402 "parse.c"
     break;
 
   case 28: /* $@6: %empty  */
-#line 2708 "parse.y"
+#line 2727 "parse.y"
                                      {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);}
-#line 8389 "parse.c"
+#line 8408 "parse.c"
     break;
 
   case 29: /* stmt: "'alias'" fitem $@6 fitem  */
-#line 2709 "parse.y"
+#line 2728 "parse.y"
                     {
                         (yyval.node) = NEW_ALIAS((yyvsp[-2].node), (yyvsp[0].node), &(yyloc), &(yylsp[-3]));
                     }
-#line 8397 "parse.c"
+#line 8416 "parse.c"
     break;
 
   case 30: /* stmt: "'alias'" "global variable" "global variable"  */
-#line 2713 "parse.y"
+#line 2732 "parse.y"
                     {
                         (yyval.node) = NEW_VALIAS((yyvsp[-1].id), (yyvsp[0].id), &(yyloc), &(yylsp[-2]));
                     }
-#line 8405 "parse.c"
+#line 8424 "parse.c"
     break;
 
   case 31: /* stmt: "'alias'" "global variable" "back reference"  */
-#line 2717 "parse.y"
+#line 2736 "parse.y"
                     {
                         char buf[2];
                         buf[0] = '$';
                         YSTUB("grammar"); /* PORTME: buf[1] = (char)RNODE_BACK_REF($old)->nd_nth; */
                         (yyval.node) = NEW_VALIAS((yyvsp[-1].id), rb_intern2(buf, 2), &(yyloc), &(yylsp[-2]));
                     }
-#line 8416 "parse.c"
+#line 8435 "parse.c"
     break;
 
   case 32: /* stmt: "'alias'" "global variable" "numbered reference"  */
-#line 2724 "parse.y"
+#line 2743 "parse.y"
                     {
                         static const char mesg[] = "can't make alias for the number variables";
                         yyerror1(&(yylsp[0]), mesg);
                         (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 8426 "parse.c"
+#line 8445 "parse.c"
     break;
 
   case 33: /* stmt: "'undef'" undef_list  */
-#line 2730 "parse.y"
+#line 2749 "parse.y"
                     {
                         YSTUB("grammar"); /* PORTME: nd_set_first_loc($list, @kw.beg_pos); */
                         YSTUB("grammar"); /* PORTME: RNODE_UNDEF($list)->keyword_loc = @kw; */
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 8436 "parse.c"
+#line 8455 "parse.c"
     break;
 
   case 34: /* stmt: stmt "'if' modifier" expr_value  */
-#line 2736 "parse.y"
+#line 2755 "parse.y"
                     {
                         (yyval.node) = new_if(p, (yyvsp[0].node), remove_begin((yyvsp[-2].node)), 0, &(yyloc), &(yylsp[-1]), &NULL_LOC, &NULL_LOC);
                         fixpos((yyval.node), (yyvsp[0].node));
                     }
-#line 8445 "parse.c"
+#line 8464 "parse.c"
     break;
 
   case 35: /* stmt: stmt "'unless' modifier" expr_value  */
-#line 2741 "parse.y"
+#line 2760 "parse.y"
                     {
                         (yyval.node) = new_unless(p, (yyvsp[0].node), remove_begin((yyvsp[-2].node)), 0, &(yyloc), &(yylsp[-1]), &NULL_LOC, &NULL_LOC);
                         fixpos((yyval.node), (yyvsp[0].node));
                     }
-#line 8454 "parse.c"
+#line 8473 "parse.c"
     break;
 
   case 36: /* stmt: stmt "'while' modifier" expr_value  */
-#line 2746 "parse.y"
+#line 2765 "parse.y"
                     {
                         clear_block_exit(p, false);
                         if ((yyvsp[-2].node) && nd_type_p((yyvsp[-2].node), NODE_BEGIN)) {
@@ -8464,11 +8483,11 @@ yyreduce:
                             (yyval.node) = NEW_WHILE(cond(p, (yyvsp[0].node), &(yylsp[0])), (yyvsp[-2].node), 1, &(yyloc), &(yylsp[-1]), &NULL_LOC);
                         }
                     }
-#line 8468 "parse.c"
+#line 8487 "parse.c"
     break;
 
   case 37: /* stmt: stmt "'until' modifier" expr_value  */
-#line 2756 "parse.y"
+#line 2775 "parse.y"
                     {
                         clear_block_exit(p, 0);
                         if ((yyvsp[-2].node) && nd_type_p((yyvsp[-2].node), NODE_BEGIN)) {
@@ -8478,11 +8497,11 @@ yyreduce:
                             (yyval.node) = NEW_UNTIL(cond(p, (yyvsp[0].node), &(yylsp[0])), (yyvsp[-2].node), 1, &(yyloc), &(yylsp[-1]), &NULL_LOC);
                         }
                     }
-#line 8482 "parse.c"
+#line 8501 "parse.c"
     break;
 
   case 38: /* stmt: stmt "'rescue' modifier" after_rescue stmt  */
-#line 2766 "parse.y"
+#line 2785 "parse.y"
                     {
                         p->ctxt.in_rescue = (yyvsp[-1].ctxt).in_rescue;
                         NODE *resq;
@@ -8490,11 +8509,11 @@ yyreduce:
                         resq = NEW_RESBODY(0, 0, remove_begin((yyvsp[0].node)), 0, &loc);
                         (yyval.node) = NEW_RESCUE(remove_begin((yyvsp[-3].node)), resq, 0, &(yyloc));
                     }
-#line 8494 "parse.c"
+#line 8513 "parse.c"
     break;
 
   case 39: /* stmt: k_END block_open compstmt_stmts '}'  */
-#line 2774 "parse.y"
+#line 2793 "parse.y"
                     {
                         clear_block_exit(p, true);
                         restore_block_exit(p, (yyvsp[-2].node_exits));
@@ -8505,27 +8524,27 @@ yyreduce:
                             YSTUB("grammar"); /* PORTME: RNODE_SCOPE(scope)->nd_parent = $$; */
                         }
                     }
-#line 8509 "parse.c"
+#line 8528 "parse.c"
     break;
 
   case 41: /* stmt: mlhs '=' lex_ctxt command_call_value  */
-#line 2786 "parse.y"
+#line 2805 "parse.y"
                     {
                         (yyval.node) = node_assign(p, (NODE *)(yyvsp[-3].node_masgn), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 8517 "parse.c"
+#line 8536 "parse.c"
     break;
 
   case 42: /* asgn_mrhs: lhs '=' lex_ctxt mrhs  */
-#line 2371 "parse.y"
+#line 2390 "parse.y"
                     {
                         (yyval.node) = node_assign(p, (NODE *)(yyvsp[-3].node), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 8525 "parse.c"
+#line 8544 "parse.c"
     break;
 
   case 44: /* stmt: mlhs '=' lex_ctxt mrhs_arg "'rescue' modifier" after_rescue stmt  */
-#line 2792 "parse.y"
+#line 2811 "parse.y"
                     {
                         p->ctxt.in_rescue = (yyvsp[-1].ctxt).in_rescue;
                         YYLTYPE loc = code_loc_gen(&(yylsp[-2]), &(yylsp[0]));
@@ -8534,103 +8553,103 @@ yyreduce:
                         (yyvsp[-3].node) = NEW_RESCUE((yyvsp[-3].node), (yyvsp[0].node), 0, &loc);
                         (yyval.node) = node_assign(p, (NODE *)(yyvsp[-6].node_masgn), (yyvsp[-3].node), (yyvsp[-4].ctxt), &(yyloc));
                     }
-#line 8538 "parse.c"
+#line 8557 "parse.c"
     break;
 
   case 45: /* stmt: mlhs '=' lex_ctxt mrhs_arg  */
-#line 2801 "parse.y"
+#line 2820 "parse.y"
                     {
                         (yyval.node) = node_assign(p, (NODE *)(yyvsp[-3].node_masgn), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 8546 "parse.c"
+#line 8565 "parse.c"
     break;
 
   case 47: /* stmt: error  */
-#line 2806 "parse.y"
+#line 2825 "parse.y"
                     {
                         (void)yynerrs;
                         (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 8555 "parse.c"
+#line 8574 "parse.c"
     break;
 
   case 48: /* asgn_command_rhs: lhs '=' lex_ctxt command_rhs  */
-#line 2371 "parse.y"
+#line 2390 "parse.y"
                     {
                         (yyval.node) = node_assign(p, (NODE *)(yyvsp[-3].node), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 8563 "parse.c"
+#line 8582 "parse.c"
     break;
 
   case 50: /* op_asgn_command_rhs: var_lhs "operator-assignment" lex_ctxt command_rhs  */
-#line 2485 "parse.y"
+#line 2504 "parse.y"
                     {
                         (yyval.node) = new_op_assign(p, (yyvsp[-3].node), (yyvsp[-2].id), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 8571 "parse.c"
+#line 8590 "parse.c"
     break;
 
   case 51: /* op_asgn_command_rhs: primary_value '[' opt_call_args rbracket "operator-assignment" lex_ctxt command_rhs  */
-#line 2489 "parse.y"
+#line 2508 "parse.y"
                     {
                         (yyval.node) = new_ary_op_assign(p, (yyvsp[-6].node), (yyvsp[-4].node), (yyvsp[-2].id), (yyvsp[0].node), &(yylsp[-4]), &(yyloc), &NULL_LOC, &(yylsp[-5]), &(yylsp[-3]), &(yylsp[-2]));
                     }
-#line 8579 "parse.c"
+#line 8598 "parse.c"
     break;
 
   case 52: /* op_asgn_command_rhs: primary_value call_op "local variable or method" "operator-assignment" lex_ctxt command_rhs  */
-#line 2493 "parse.y"
+#line 2512 "parse.y"
                     {
                         (yyval.node) = new_attr_op_assign(p, (yyvsp[-5].node), (yyvsp[-4].id), (yyvsp[-3].id), (yyvsp[-2].id), (yyvsp[0].node), &(yyloc), &(yylsp[-4]), &(yylsp[-3]), &(yylsp[-2]));
                     }
-#line 8587 "parse.c"
+#line 8606 "parse.c"
     break;
 
   case 53: /* op_asgn_command_rhs: primary_value call_op "constant" "operator-assignment" lex_ctxt command_rhs  */
-#line 2497 "parse.y"
+#line 2516 "parse.y"
                     {
                         (yyval.node) = new_attr_op_assign(p, (yyvsp[-5].node), (yyvsp[-4].id), (yyvsp[-3].id), (yyvsp[-2].id), (yyvsp[0].node), &(yyloc), &(yylsp[-4]), &(yylsp[-3]), &(yylsp[-2]));
                     }
-#line 8595 "parse.c"
+#line 8614 "parse.c"
     break;
 
   case 54: /* op_asgn_command_rhs: primary_value "::" "local variable or method" "operator-assignment" lex_ctxt command_rhs  */
-#line 2501 "parse.y"
+#line 2520 "parse.y"
                     {
                         (yyval.node) = new_attr_op_assign(p, (yyvsp[-5].node), idCOLON2, (yyvsp[-3].id), (yyvsp[-2].id), (yyvsp[0].node), &(yyloc), &(yylsp[-4]), &(yylsp[-3]), &(yylsp[-2]));
                     }
-#line 8603 "parse.c"
+#line 8622 "parse.c"
     break;
 
   case 55: /* op_asgn_command_rhs: primary_value "::" "constant" "operator-assignment" lex_ctxt command_rhs  */
-#line 2505 "parse.y"
+#line 2524 "parse.y"
                     {
                         YYLTYPE loc = code_loc_gen(&(yylsp[-5]), &(yylsp[-3]));
                         (yyval.node) = new_const_op_assign(p, NEW_COLON2((yyvsp[-5].node), (yyvsp[-3].id), &loc, &(yylsp[-4]), &(yylsp[-3])), (yyvsp[-2].id), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 8612 "parse.c"
+#line 8631 "parse.c"
     break;
 
   case 56: /* op_asgn_command_rhs: ":: at EXPR_BEG" "constant" "operator-assignment" lex_ctxt command_rhs  */
-#line 2510 "parse.y"
+#line 2529 "parse.y"
                     {
                         YYLTYPE loc = code_loc_gen(&(yylsp[-4]), &(yylsp[-3]));
                         (yyval.node) = new_const_op_assign(p, NEW_COLON3((yyvsp[-3].id), &loc, &(yylsp[-4]), &(yylsp[-3])), (yyvsp[-2].id), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 8621 "parse.c"
+#line 8640 "parse.c"
     break;
 
   case 57: /* op_asgn_command_rhs: backref "operator-assignment" lex_ctxt command_rhs  */
-#line 2515 "parse.y"
+#line 2534 "parse.y"
                     {
                         VALUE MAYBE_UNUSED(e) = rb_backref_error(p, (yyvsp[-3].node));
                         (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 8630 "parse.c"
+#line 8649 "parse.c"
     break;
 
   case 59: /* def_endless_method_endless_command: defn_head f_opt_paren_args '=' endless_command  */
-#line 2405 "parse.y"
+#line 2424 "parse.y"
                     {
                         endless_method_name(p, (yyvsp[-3].node_def_temp)->nd_mid, &(yylsp[-3]));
                         restore_defun(p, (yyvsp[-3].node_def_temp));
@@ -8638,11 +8657,11 @@ yyreduce:
                         (yyvsp[0].node) = new_scope_body(p, (yyvsp[-2].node_args), (yyvsp[0].node), (yyval.node), &(yyloc));
                         local_pop(p);
                     }
-#line 8642 "parse.c"
+#line 8661 "parse.c"
     break;
 
   case 60: /* def_endless_method_endless_command: defs_head f_opt_paren_args '=' endless_command  */
-#line 2413 "parse.y"
+#line 2432 "parse.y"
                     {
                         endless_method_name(p, (yyvsp[-3].node_def_temp)->nd_mid, &(yylsp[-3]));
                         restore_defun(p, (yyvsp[-3].node_def_temp));
@@ -8650,78 +8669,78 @@ yyreduce:
                         (yyvsp[0].node) = new_scope_body(p, (yyvsp[-2].node_args), (yyvsp[0].node), (yyval.node), &(yyloc));
                         local_pop(p);
                     }
-#line 8654 "parse.c"
+#line 8673 "parse.c"
     break;
 
   case 63: /* endless_command: endless_command "'rescue' modifier" after_rescue arg  */
-#line 2819 "parse.y"
+#line 2838 "parse.y"
                     {
                         p->ctxt.in_rescue = (yyvsp[-1].ctxt).in_rescue;
                         (yyval.node) = rescued_expr(p, (yyvsp[-3].node), (yyvsp[0].node), &(yylsp[-3]), &(yylsp[-2]), &(yylsp[0]));
                     }
-#line 8663 "parse.c"
+#line 8682 "parse.c"
     break;
 
   case 66: /* endless_command: "'not'" option_'\n' endless_command  */
-#line 2824 "parse.y"
+#line 2843 "parse.y"
                     {
                         (yyval.node) = call_uni_op(p, method_cond(p, (yyvsp[0].node), &(yylsp[0])), METHOD_NOT, &(yylsp[-2]), &(yyloc));
                     }
-#line 8671 "parse.c"
+#line 8690 "parse.c"
     break;
 
   case 68: /* command_rhs: command_call_value "'rescue' modifier" after_rescue stmt  */
-#line 2831 "parse.y"
+#line 2850 "parse.y"
                     {
                         p->ctxt.in_rescue = (yyvsp[-1].ctxt).in_rescue;
                         YYLTYPE loc = code_loc_gen(&(yylsp[-2]), &(yylsp[0]));
                         (yyval.node) = NEW_RESCUE((yyvsp[-3].node), NEW_RESBODY(0, 0, remove_begin((yyvsp[0].node)), 0, &loc), 0, &(yyloc));
                     }
-#line 8681 "parse.c"
+#line 8700 "parse.c"
     break;
 
   case 71: /* expr: expr "'and'" expr  */
-#line 2841 "parse.y"
+#line 2860 "parse.y"
                     {
                         (yyval.node) = logop(p, idAND, (yyvsp[-2].node), (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 8689 "parse.c"
+#line 8708 "parse.c"
     break;
 
   case 72: /* expr: expr "'or'" expr  */
-#line 2845 "parse.y"
+#line 2864 "parse.y"
                     {
                         (yyval.node) = logop(p, idOR, (yyvsp[-2].node), (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 8697 "parse.c"
+#line 8716 "parse.c"
     break;
 
   case 73: /* expr: "'not'" option_'\n' expr  */
-#line 2849 "parse.y"
+#line 2868 "parse.y"
                     {
                         (yyval.node) = call_uni_op(p, method_cond(p, (yyvsp[0].node), &(yylsp[0])), METHOD_NOT, &(yylsp[-2]), &(yyloc));
                     }
-#line 8705 "parse.c"
+#line 8724 "parse.c"
     break;
 
   case 74: /* expr: '!' command_call  */
-#line 2853 "parse.y"
+#line 2872 "parse.y"
                     {
                         (yyval.node) = call_uni_op(p, method_cond(p, (yyvsp[0].node), &(yylsp[0])), '!', &(yylsp[-1]), &(yyloc));
                     }
-#line 8713 "parse.c"
+#line 8732 "parse.c"
     break;
 
   case 75: /* $@7: %empty  */
-#line 2857 "parse.y"
+#line 2876 "parse.y"
                     {
                         value_expr(p, (yyvsp[-1].node));
                     }
-#line 8721 "parse.c"
+#line 8740 "parse.c"
     break;
 
   case 76: /* expr: arg "=>" $@7 p_in_kwarg p_pvtbl p_pktbl p_top_expr_body  */
-#line 2862 "parse.y"
+#line 2881 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-1].tbl));
                         pop_pvtbl(p, (yyvsp[-2].tbl));
@@ -8730,19 +8749,19 @@ yyreduce:
                         p->ctxt.capture_in_pattern = (yyvsp[-3].ctxt).capture_in_pattern;
                         (yyval.node) = NEW_CASE3((yyvsp[-6].node), NEW_IN((yyvsp[0].node), 0, 0, &(yylsp[0]), &NULL_LOC, &NULL_LOC, &(yylsp[-5])), &(yyloc), &NULL_LOC, &NULL_LOC);
                     }
-#line 8734 "parse.c"
+#line 8753 "parse.c"
     break;
 
   case 77: /* $@8: %empty  */
-#line 2871 "parse.y"
+#line 2890 "parse.y"
                     {
                         value_expr(p, (yyvsp[-1].node));
                     }
-#line 8742 "parse.c"
+#line 8761 "parse.c"
     break;
 
   case 78: /* expr: arg "'in'" $@8 p_in_kwarg p_pvtbl p_pktbl p_top_expr_body  */
-#line 2876 "parse.y"
+#line 2895 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-1].tbl));
                         pop_pvtbl(p, (yyvsp[-2].tbl));
@@ -8751,11 +8770,11 @@ yyreduce:
                         p->ctxt.capture_in_pattern = (yyvsp[-3].ctxt).capture_in_pattern;
                         (yyval.node) = NEW_CASE3((yyvsp[-6].node), NEW_IN((yyvsp[0].node), NEW_TRUE(&(yylsp[0])), NEW_FALSE(&(yylsp[0])), &(yylsp[0]), &(yylsp[-5]), &NULL_LOC, &NULL_LOC), &(yyloc), &NULL_LOC, &NULL_LOC);
                     }
-#line 8755 "parse.c"
+#line 8774 "parse.c"
     break;
 
   case 80: /* def_name: fname  */
-#line 2888 "parse.y"
+#line 2907 "parse.y"
                     {
                         numparam_name(p, (yyvsp[0].id));
                         local_push(p, 0);
@@ -8764,135 +8783,135 @@ yyreduce:
                         p->ctxt.cant_return = 0;
                         (yyval.id) = (yyvsp[0].id);
                     }
-#line 8768 "parse.c"
+#line 8787 "parse.c"
     break;
 
   case 81: /* defn_head: k_def def_name  */
-#line 2899 "parse.y"
+#line 2918 "parse.y"
                     {
                         (yyval.node_def_temp) = def_head_save(p, (yyvsp[-1].node_def_temp));
                         (yyval.node_def_temp)->nd_mid = (yyvsp[0].id);
                         (yyval.node_def_temp)->nd_def = NEW_DEFN((yyvsp[0].id), 0, &(yyloc));
                     }
-#line 8778 "parse.c"
+#line 8797 "parse.c"
     break;
 
   case 82: /* $@9: %empty  */
-#line 2907 "parse.y"
+#line 2926 "parse.y"
                     {
                         SET_LEX_STATE(EXPR_FNAME);
                     }
-#line 8786 "parse.c"
+#line 8805 "parse.c"
     break;
 
   case 83: /* defs_head: k_def singleton dot_or_colon $@9 def_name  */
-#line 2911 "parse.y"
+#line 2930 "parse.y"
                     {
                         SET_LEX_STATE(EXPR_ENDFN|EXPR_LABEL); /* force for args */
                         (yyval.node_def_temp) = def_head_save(p, (yyvsp[-4].node_def_temp));
                         (yyval.node_def_temp)->nd_mid = (yyvsp[0].id);
                         (yyval.node_def_temp)->nd_def = NEW_DEFS((yyvsp[-3].node), (yyvsp[0].id), 0, &(yyloc));
                     }
-#line 8797 "parse.c"
+#line 8816 "parse.c"
     break;
 
   case 84: /* value_expr_expr: expr  */
-#line 2569 "parse.y"
+#line 2588 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 8806 "parse.c"
+#line 8825 "parse.c"
     break;
 
   case 86: /* expr_value: error  */
-#line 2921 "parse.y"
+#line 2940 "parse.y"
                     {
                         (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 8814 "parse.c"
+#line 8833 "parse.c"
     break;
 
   case 87: /* $@10: %empty  */
-#line 2926 "parse.y"
+#line 2945 "parse.y"
                 {COND_PUSH(1);}
-#line 8820 "parse.c"
+#line 8839 "parse.c"
     break;
 
   case 88: /* $@11: %empty  */
-#line 2926 "parse.y"
+#line 2945 "parse.y"
                                               {COND_POP();}
-#line 8826 "parse.c"
+#line 8845 "parse.c"
     break;
 
   case 89: /* expr_value_do: $@10 expr_value do $@11  */
-#line 2927 "parse.y"
+#line 2946 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-2].node);
                     }
-#line 8834 "parse.c"
+#line 8853 "parse.c"
     break;
 
   case 92: /* value_expr_command_call: command_call  */
-#line 2569 "parse.y"
+#line 2588 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 8843 "parse.c"
+#line 8862 "parse.c"
     break;
 
   case 95: /* block_command: block_call call_op2 operation2 command_args  */
-#line 2941 "parse.y"
+#line 2960 "parse.y"
                     {
                         (yyval.node) = new_qcall(p, (yyvsp[-2].id), (yyvsp[-3].node), (yyvsp[-1].id), (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 8851 "parse.c"
+#line 8870 "parse.c"
     break;
 
   case 96: /* cmd_brace_block: "{ arg" brace_body '}'  */
-#line 2947 "parse.y"
+#line 2966 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node);
                         set_embraced_location((yyval.node), &(yylsp[-2]), &(yylsp[0]));
                     }
-#line 8860 "parse.c"
+#line 8879 "parse.c"
     break;
 
   case 97: /* fcall: "local variable or method"  */
-#line 2954 "parse.y"
+#line 2973 "parse.y"
                     {
                         (yyval.node_fcall) = NEW_FCALL((yyvsp[0].id), 0, &(yyloc));
                     }
-#line 8868 "parse.c"
+#line 8887 "parse.c"
     break;
 
   case 98: /* fcall: "constant"  */
-#line 2954 "parse.y"
+#line 2973 "parse.y"
                     {
                         (yyval.node_fcall) = NEW_FCALL((yyvsp[0].id), 0, &(yyloc));
                     }
-#line 8876 "parse.c"
+#line 8895 "parse.c"
     break;
 
   case 99: /* fcall: "method"  */
-#line 2954 "parse.y"
+#line 2973 "parse.y"
                     {
                         (yyval.node_fcall) = NEW_FCALL((yyvsp[0].id), 0, &(yyloc));
                     }
-#line 8884 "parse.c"
+#line 8903 "parse.c"
     break;
 
   case 100: /* command: fcall command_args  */
-#line 2960 "parse.y"
+#line 2979 "parse.y"
                     {
                         (yyval.node) = pm_yfcall_args(p, (NODE *)(yyvsp[-1].node_fcall), (yyvsp[0].node), &(yyloc));
                     }
-#line 8892 "parse.c"
+#line 8911 "parse.c"
     break;
 
   case 101: /* command: fcall command_args cmd_brace_block  */
-#line 2964 "parse.y"
+#line 2983 "parse.y"
                     {
                         block_dup_check(p, (yyvsp[-1].node), (yyvsp[0].node));
                         YSTUB("grammar"); /* PORTME: $1->nd_args = $2; */
@@ -8900,968 +8919,968 @@ yyreduce:
                         fixpos((yyval.node), RNODE((yyvsp[-2].node_fcall)));
                         YSTUB("grammar"); /* PORTME: nd_set_last_loc($1, @2.end_pos); */
                     }
-#line 8904 "parse.c"
+#line 8923 "parse.c"
     break;
 
   case 102: /* command: primary_value call_op operation2 command_args  */
-#line 2972 "parse.y"
+#line 2991 "parse.y"
                     {
                         (yyval.node) = new_command_qcall(p, (yyvsp[-2].id), (yyvsp[-3].node), (yyvsp[-1].id), (yyvsp[0].node), 0, &(yylsp[-1]), &(yyloc));
                     }
-#line 8912 "parse.c"
+#line 8931 "parse.c"
     break;
 
   case 103: /* command: primary_value call_op operation2 command_args cmd_brace_block  */
-#line 2976 "parse.y"
+#line 2995 "parse.y"
                     {
                         (yyval.node) = new_command_qcall(p, (yyvsp[-3].id), (yyvsp[-4].node), (yyvsp[-2].id), (yyvsp[-1].node), (yyvsp[0].node), &(yylsp[-2]), &(yyloc));
                     }
-#line 8920 "parse.c"
+#line 8939 "parse.c"
     break;
 
   case 104: /* command: primary_value "::" operation2 command_args  */
-#line 2980 "parse.y"
+#line 2999 "parse.y"
                     {
                         (yyval.node) = new_command_qcall(p, idCOLON2, (yyvsp[-3].node), (yyvsp[-1].id), (yyvsp[0].node), 0, &(yylsp[-1]), &(yyloc));
                     }
-#line 8928 "parse.c"
+#line 8947 "parse.c"
     break;
 
   case 105: /* command: primary_value "::" operation2 command_args cmd_brace_block  */
-#line 2984 "parse.y"
+#line 3003 "parse.y"
                     {
                         (yyval.node) = new_command_qcall(p, idCOLON2, (yyvsp[-4].node), (yyvsp[-2].id), (yyvsp[-1].node), (yyvsp[0].node), &(yylsp[-2]), &(yyloc));
                    }
-#line 8936 "parse.c"
+#line 8955 "parse.c"
     break;
 
   case 106: /* command: primary_value "::" "constant" '{' brace_body '}'  */
-#line 2988 "parse.y"
+#line 3007 "parse.y"
                     {
                         set_embraced_location((yyvsp[-1].node), &(yylsp[-2]), &(yylsp[0]));
                         (yyval.node) = new_command_qcall(p, idCOLON2, (yyvsp[-5].node), (yyvsp[-3].id), 0, (yyvsp[-1].node), &(yylsp[-3]), &(yyloc));
                    }
-#line 8945 "parse.c"
+#line 8964 "parse.c"
     break;
 
   case 107: /* command: "'super'" command_args  */
-#line 2993 "parse.y"
+#line 3012 "parse.y"
                     {
                         (yyval.node) = NEW_SUPER((yyvsp[0].node), &(yyloc), &(yylsp[-1]), &NULL_LOC, &NULL_LOC);
                         fixpos((yyval.node), (yyvsp[0].node));
                     }
-#line 8954 "parse.c"
+#line 8973 "parse.c"
     break;
 
   case 108: /* command: k_yield command_args  */
-#line 2998 "parse.y"
+#line 3017 "parse.y"
                     {
                         (yyval.node) = NEW_YIELD((yyvsp[0].node), &(yyloc), &(yylsp[-1]), &NULL_LOC, &NULL_LOC);
                         fixpos((yyval.node), (yyvsp[0].node));
                     }
-#line 8963 "parse.c"
+#line 8982 "parse.c"
     break;
 
   case 109: /* command: k_return call_args  */
-#line 3003 "parse.y"
+#line 3022 "parse.y"
                     {
                         (yyval.node) = NEW_RETURN(ret_args(p, (yyvsp[0].node)), &(yyloc), &(yylsp[-1]));
                     }
-#line 8971 "parse.c"
+#line 8990 "parse.c"
     break;
 
   case 110: /* command: "'break'" call_args  */
-#line 3007 "parse.y"
+#line 3026 "parse.y"
                     {
                         NODE *args = 0;
                         args = ret_args(p, (yyvsp[0].node));
                         (yyval.node) = add_block_exit(p, NEW_BREAK(args, &(yyloc), &(yylsp[-1])));
                     }
-#line 8981 "parse.c"
+#line 9000 "parse.c"
     break;
 
   case 111: /* command: "'next'" call_args  */
-#line 3013 "parse.y"
+#line 3032 "parse.y"
                     {
                         NODE *args = 0;
                         args = ret_args(p, (yyvsp[0].node));
                         (yyval.node) = add_block_exit(p, NEW_NEXT(args, &(yyloc), &(yylsp[-1])));
                     }
-#line 8991 "parse.c"
+#line 9010 "parse.c"
     break;
 
   case 113: /* mlhs: "(" mlhs_inner rparen  */
-#line 3022 "parse.y"
+#line 3041 "parse.y"
                     {
                         (yyval.node_masgn) = (yyvsp[-1].node_masgn);
                     }
-#line 8999 "parse.c"
+#line 9018 "parse.c"
     break;
 
   case 115: /* mlhs_inner: "(" mlhs_inner rparen  */
-#line 3029 "parse.y"
+#line 3048 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN(NEW_LIST((NODE *)(yyvsp[-1].node_masgn), &(yyloc)), 0, &(yyloc));
                     }
-#line 9007 "parse.c"
+#line 9026 "parse.c"
     break;
 
   case 116: /* mlhs_basic: mlhs_head  */
-#line 3035 "parse.y"
+#line 3054 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN((yyvsp[0].node), 0, &(yyloc));
                     }
-#line 9015 "parse.c"
+#line 9034 "parse.c"
     break;
 
   case 117: /* mlhs_basic: mlhs_head mlhs_item  */
-#line 3039 "parse.y"
+#line 3058 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN(list_append(p, (yyvsp[-1].node), (yyvsp[0].node)), 0, &(yyloc));
                     }
-#line 9023 "parse.c"
+#line 9042 "parse.c"
     break;
 
   case 118: /* mlhs_basic: mlhs_head "*" mlhs_node  */
-#line 3043 "parse.y"
+#line 3062 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN((yyvsp[-2].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 9031 "parse.c"
+#line 9050 "parse.c"
     break;
 
   case 119: /* mlhs_items_mlhs_item: mlhs_item  */
-#line 2474 "parse.y"
+#line 2493 "parse.y"
                     {
                         (yyval.node) = NEW_LIST((yyvsp[0].node), &(yyloc));
                     }
-#line 9039 "parse.c"
+#line 9058 "parse.c"
     break;
 
   case 120: /* mlhs_items_mlhs_item: mlhs_items_mlhs_item ',' mlhs_item  */
-#line 2478 "parse.y"
+#line 2497 "parse.y"
                     {
                         (yyval.node) = list_append(p, (yyvsp[-2].node), (yyvsp[0].node));
                     }
-#line 9047 "parse.c"
+#line 9066 "parse.c"
     break;
 
   case 121: /* mlhs_basic: mlhs_head "*" mlhs_node ',' mlhs_items_mlhs_item  */
-#line 3047 "parse.y"
+#line 3066 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN((yyvsp[-4].node), NEW_POSTARG((yyvsp[-2].node),(yyvsp[0].node),&(yyloc)), &(yyloc));
                     }
-#line 9055 "parse.c"
+#line 9074 "parse.c"
     break;
 
   case 122: /* mlhs_basic: mlhs_head "*"  */
-#line 3051 "parse.y"
+#line 3070 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN((yyvsp[-1].node), NODE_SPECIAL_NO_NAME_REST, &(yyloc));
                     }
-#line 9063 "parse.c"
+#line 9082 "parse.c"
     break;
 
   case 123: /* mlhs_basic: mlhs_head "*" ',' mlhs_items_mlhs_item  */
-#line 3055 "parse.y"
+#line 3074 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN((yyvsp[-3].node), NEW_POSTARG(NODE_SPECIAL_NO_NAME_REST, (yyvsp[0].node), &(yyloc)), &(yyloc));
                     }
-#line 9071 "parse.c"
+#line 9090 "parse.c"
     break;
 
   case 124: /* mlhs_basic: "*" mlhs_node  */
-#line 3059 "parse.y"
+#line 3078 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN(0, (yyvsp[0].node), &(yyloc));
                     }
-#line 9079 "parse.c"
+#line 9098 "parse.c"
     break;
 
   case 125: /* mlhs_basic: "*" mlhs_node ',' mlhs_items_mlhs_item  */
-#line 3063 "parse.y"
+#line 3082 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN(0, NEW_POSTARG((yyvsp[-2].node),(yyvsp[0].node),&(yyloc)), &(yyloc));
                     }
-#line 9087 "parse.c"
+#line 9106 "parse.c"
     break;
 
   case 126: /* mlhs_basic: "*"  */
-#line 3067 "parse.y"
+#line 3086 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN(0, NODE_SPECIAL_NO_NAME_REST, &(yyloc));
                     }
-#line 9095 "parse.c"
+#line 9114 "parse.c"
     break;
 
   case 127: /* mlhs_basic: "*" ',' mlhs_items_mlhs_item  */
-#line 3071 "parse.y"
+#line 3090 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN(0, NEW_POSTARG(NODE_SPECIAL_NO_NAME_REST, (yyvsp[0].node), &(yyloc)), &(yyloc));
                     }
-#line 9103 "parse.c"
+#line 9122 "parse.c"
     break;
 
   case 129: /* mlhs_item: "(" mlhs_inner rparen  */
-#line 3078 "parse.y"
+#line 3097 "parse.y"
                     {
                         (yyval.node) = (NODE *)(yyvsp[-1].node_masgn);
                     }
-#line 9111 "parse.c"
+#line 9130 "parse.c"
     break;
 
   case 130: /* mlhs_head: mlhs_item ','  */
-#line 3084 "parse.y"
+#line 3103 "parse.y"
                     {
                         (yyval.node) = NEW_LIST((yyvsp[-1].node), &(yylsp[-1]));
                     }
-#line 9119 "parse.c"
+#line 9138 "parse.c"
     break;
 
   case 131: /* mlhs_head: mlhs_head mlhs_item ','  */
-#line 3088 "parse.y"
+#line 3107 "parse.y"
                     {
                         (yyval.node) = list_append(p, (yyvsp[-2].node), (yyvsp[-1].node));
                     }
-#line 9127 "parse.c"
+#line 9146 "parse.c"
     break;
 
   case 132: /* mlhs_node: user_variable  */
-#line 3095 "parse.y"
+#line 3114 "parse.y"
                     {
                         (yyval.node) = assignable(p, (yyvsp[0].id), 0, &(yyloc));
                     }
-#line 9135 "parse.c"
+#line 9154 "parse.c"
     break;
 
   case 133: /* mlhs_node: keyword_variable  */
-#line 3095 "parse.y"
+#line 3114 "parse.y"
                     {
                         (yyval.node) = assignable(p, (yyvsp[0].id), 0, &(yyloc));
                     }
-#line 9143 "parse.c"
+#line 9162 "parse.c"
     break;
 
   case 134: /* mlhs_node: primary_value '[' opt_call_args rbracket  */
-#line 3099 "parse.y"
+#line 3118 "parse.y"
                     {
                         (yyval.node) = aryset(p, (yyvsp[-3].node), (yyvsp[-1].node), &(yyloc));
                     }
-#line 9151 "parse.c"
+#line 9170 "parse.c"
     break;
 
   case 135: /* mlhs_node: primary_value call_op "local variable or method"  */
-#line 3103 "parse.y"
+#line 3122 "parse.y"
                     {
                         anddot_multiple_assignment_check(p, &(yylsp[-1]), (yyvsp[-1].id));
                         (yyval.node) = attrset(p, (yyvsp[-2].node), (yyvsp[-1].id), (yyvsp[0].id), &(yyloc));
                     }
-#line 9160 "parse.c"
+#line 9179 "parse.c"
     break;
 
   case 136: /* mlhs_node: primary_value call_op "constant"  */
-#line 3103 "parse.y"
+#line 3122 "parse.y"
                     {
                         anddot_multiple_assignment_check(p, &(yylsp[-1]), (yyvsp[-1].id));
                         (yyval.node) = attrset(p, (yyvsp[-2].node), (yyvsp[-1].id), (yyvsp[0].id), &(yyloc));
                     }
-#line 9169 "parse.c"
+#line 9188 "parse.c"
     break;
 
   case 137: /* mlhs_node: primary_value "::" "local variable or method"  */
-#line 3108 "parse.y"
+#line 3127 "parse.y"
                     {
                         (yyval.node) = attrset(p, (yyvsp[-2].node), idCOLON2, (yyvsp[0].id), &(yyloc));
                     }
-#line 9177 "parse.c"
+#line 9196 "parse.c"
     break;
 
   case 138: /* mlhs_node: primary_value "::" "constant"  */
-#line 3112 "parse.y"
+#line 3131 "parse.y"
                     {
                         (yyval.node) = const_decl(p, NEW_COLON2((yyvsp[-2].node), (yyvsp[0].id), &(yyloc), &(yylsp[-1]), &(yylsp[0])), &(yyloc));
                     }
-#line 9185 "parse.c"
+#line 9204 "parse.c"
     break;
 
   case 139: /* mlhs_node: ":: at EXPR_BEG" "constant"  */
-#line 3116 "parse.y"
+#line 3135 "parse.y"
                     {
                         (yyval.node) = const_decl(p, NEW_COLON3((yyvsp[0].id), &(yyloc), &(yylsp[-1]), &(yylsp[0])), &(yyloc));
                     }
-#line 9193 "parse.c"
+#line 9212 "parse.c"
     break;
 
   case 140: /* mlhs_node: backref  */
-#line 3120 "parse.y"
+#line 3139 "parse.y"
                     {
                         VALUE MAYBE_UNUSED(e) = rb_backref_error(p, (yyvsp[0].node));
                         (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 9202 "parse.c"
+#line 9221 "parse.c"
     break;
 
   case 141: /* lhs: user_variable  */
-#line 3127 "parse.y"
+#line 3146 "parse.y"
                     {
                         (yyval.node) = assignable(p, (yyvsp[0].id), 0, &(yyloc));
                     }
-#line 9210 "parse.c"
+#line 9229 "parse.c"
     break;
 
   case 142: /* lhs: keyword_variable  */
-#line 3127 "parse.y"
+#line 3146 "parse.y"
                     {
                         (yyval.node) = assignable(p, (yyvsp[0].id), 0, &(yyloc));
                     }
-#line 9218 "parse.c"
+#line 9237 "parse.c"
     break;
 
   case 143: /* lhs: primary_value '[' opt_call_args rbracket  */
-#line 3131 "parse.y"
+#line 3150 "parse.y"
                     {
                         (yyval.node) = aryset(p, (yyvsp[-3].node), (yyvsp[-1].node), &(yyloc));
                     }
-#line 9226 "parse.c"
+#line 9245 "parse.c"
     break;
 
   case 144: /* lhs: primary_value call_op "local variable or method"  */
-#line 3135 "parse.y"
+#line 3154 "parse.y"
                     {
                         (yyval.node) = attrset(p, (yyvsp[-2].node), (yyvsp[-1].id), (yyvsp[0].id), &(yyloc));
                     }
-#line 9234 "parse.c"
+#line 9253 "parse.c"
     break;
 
   case 145: /* lhs: primary_value call_op "constant"  */
-#line 3135 "parse.y"
+#line 3154 "parse.y"
                     {
                         (yyval.node) = attrset(p, (yyvsp[-2].node), (yyvsp[-1].id), (yyvsp[0].id), &(yyloc));
                     }
-#line 9242 "parse.c"
+#line 9261 "parse.c"
     break;
 
   case 146: /* lhs: primary_value "::" "local variable or method"  */
-#line 3139 "parse.y"
+#line 3158 "parse.y"
                     {
                         (yyval.node) = attrset(p, (yyvsp[-2].node), idCOLON2, (yyvsp[0].id), &(yyloc));
                     }
-#line 9250 "parse.c"
+#line 9269 "parse.c"
     break;
 
   case 147: /* lhs: primary_value "::" "constant"  */
-#line 3143 "parse.y"
+#line 3162 "parse.y"
                     {
                         (yyval.node) = const_decl(p, NEW_COLON2((yyvsp[-2].node), (yyvsp[0].id), &(yyloc), &(yylsp[-1]), &(yylsp[0])), &(yyloc));
                     }
-#line 9258 "parse.c"
+#line 9277 "parse.c"
     break;
 
   case 148: /* lhs: ":: at EXPR_BEG" "constant"  */
-#line 3147 "parse.y"
+#line 3166 "parse.y"
                     {
                         (yyval.node) = const_decl(p, NEW_COLON3((yyvsp[0].id), &(yyloc), &(yylsp[-1]), &(yylsp[0])), &(yyloc));
                     }
-#line 9266 "parse.c"
+#line 9285 "parse.c"
     break;
 
   case 149: /* lhs: backref  */
-#line 3151 "parse.y"
+#line 3170 "parse.y"
                     {
                         VALUE MAYBE_UNUSED(e) = rb_backref_error(p, (yyvsp[0].node));
                         (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 9275 "parse.c"
+#line 9294 "parse.c"
     break;
 
   case 150: /* cname: "local variable or method"  */
-#line 3158 "parse.y"
+#line 3177 "parse.y"
                     {
                         static const char mesg[] = "class/module name must be CONSTANT";
                         yyerror1(&(yylsp[0]), mesg);
                     }
-#line 9284 "parse.c"
+#line 9303 "parse.c"
     break;
 
   case 152: /* cpath: ":: at EXPR_BEG" cname  */
-#line 3166 "parse.y"
+#line 3185 "parse.y"
                     {
                         (yyval.node) = NEW_COLON3((yyvsp[0].id), &(yyloc), &(yylsp[-1]), &(yylsp[0]));
                     }
-#line 9292 "parse.c"
+#line 9311 "parse.c"
     break;
 
   case 153: /* cpath: cname  */
-#line 3170 "parse.y"
+#line 3189 "parse.y"
                     {
                         (yyval.node) = NEW_COLON2(0, (yyvsp[0].id), &(yyloc), &NULL_LOC, &(yylsp[0]));
                     }
-#line 9300 "parse.c"
+#line 9319 "parse.c"
     break;
 
   case 154: /* cpath: primary_value "::" cname  */
-#line 3174 "parse.y"
+#line 3193 "parse.y"
                     {
                         (yyval.node) = NEW_COLON2((yyvsp[-2].node), (yyvsp[0].id), &(yyloc), &(yylsp[-1]), &(yylsp[0]));
                     }
-#line 9308 "parse.c"
+#line 9327 "parse.c"
     break;
 
   case 158: /* fname: op  */
-#line 3181 "parse.y"
+#line 3200 "parse.y"
                     {
                         SET_LEX_STATE(EXPR_ENDFN);
                         (yyval.id) = (yyvsp[0].id);
                     }
-#line 9317 "parse.c"
+#line 9336 "parse.c"
     break;
 
   case 160: /* fitem: fname  */
-#line 3189 "parse.y"
+#line 3208 "parse.y"
                     {
                         (yyval.node) = NEW_SYM(rb_id2str((yyvsp[0].id)), &(yyloc));
                     }
-#line 9325 "parse.c"
+#line 9344 "parse.c"
     break;
 
   case 162: /* undef_list: fitem  */
-#line 3196 "parse.y"
+#line 3215 "parse.y"
                     {
                         (yyval.node) = NEW_UNDEF((yyvsp[0].node), &(yyloc));
                     }
-#line 9333 "parse.c"
+#line 9352 "parse.c"
     break;
 
   case 163: /* $@12: %empty  */
-#line 3199 "parse.y"
+#line 3218 "parse.y"
                                  {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);}
-#line 9339 "parse.c"
+#line 9358 "parse.c"
     break;
 
   case 164: /* undef_list: undef_list ',' $@12 fitem  */
-#line 3200 "parse.y"
+#line 3219 "parse.y"
                     {
                         YSTUB("grammar"); /* PORTME: nd_set_last_loc($1, @4.end_pos); */
                         YSTUB("grammar"); /* PORTME: rb_parser_ary_push_node(p, RNODE_UNDEF($1)->nd_undefs, $4); */
                     }
-#line 9348 "parse.c"
+#line 9367 "parse.c"
     break;
 
   case 165: /* op: '|'  */
-#line 3206 "parse.y"
+#line 3225 "parse.y"
            { (yyval.id) = '|'; }
-#line 9354 "parse.c"
+#line 9373 "parse.c"
     break;
 
   case 166: /* op: '^'  */
-#line 3207 "parse.y"
+#line 3226 "parse.y"
                        { (yyval.id) = '^'; }
-#line 9360 "parse.c"
+#line 9379 "parse.c"
     break;
 
   case 167: /* op: '&'  */
-#line 3208 "parse.y"
+#line 3227 "parse.y"
                        { (yyval.id) = '&'; }
-#line 9366 "parse.c"
+#line 9385 "parse.c"
     break;
 
   case 168: /* op: "<=>"  */
-#line 3209 "parse.y"
+#line 3228 "parse.y"
                         { (yyval.id) = tCMP; }
-#line 9372 "parse.c"
+#line 9391 "parse.c"
     break;
 
   case 169: /* op: "=="  */
-#line 3210 "parse.y"
+#line 3229 "parse.y"
                        { (yyval.id) = tEQ; }
-#line 9378 "parse.c"
+#line 9397 "parse.c"
     break;
 
   case 170: /* op: "==="  */
-#line 3211 "parse.y"
+#line 3230 "parse.y"
                         { (yyval.id) = tEQQ; }
-#line 9384 "parse.c"
+#line 9403 "parse.c"
     break;
 
   case 171: /* op: "=~"  */
-#line 3212 "parse.y"
+#line 3231 "parse.y"
                          { (yyval.id) = tMATCH; }
-#line 9390 "parse.c"
+#line 9409 "parse.c"
     break;
 
   case 172: /* op: "!~"  */
-#line 3213 "parse.y"
+#line 3232 "parse.y"
                           { (yyval.id) = tNMATCH; }
-#line 9396 "parse.c"
+#line 9415 "parse.c"
     break;
 
   case 173: /* op: '>'  */
-#line 3214 "parse.y"
+#line 3233 "parse.y"
                        { (yyval.id) = '>'; }
-#line 9402 "parse.c"
+#line 9421 "parse.c"
     break;
 
   case 174: /* op: ">="  */
-#line 3215 "parse.y"
+#line 3234 "parse.y"
                         { (yyval.id) = tGEQ; }
-#line 9408 "parse.c"
+#line 9427 "parse.c"
     break;
 
   case 175: /* op: '<'  */
-#line 3216 "parse.y"
+#line 3235 "parse.y"
                        { (yyval.id) = '<'; }
-#line 9414 "parse.c"
+#line 9433 "parse.c"
     break;
 
   case 176: /* op: "<="  */
-#line 3217 "parse.y"
+#line 3236 "parse.y"
                         { (yyval.id) = tLEQ; }
-#line 9420 "parse.c"
+#line 9439 "parse.c"
     break;
 
   case 177: /* op: "!="  */
-#line 3218 "parse.y"
+#line 3237 "parse.y"
                         { (yyval.id) = tNEQ; }
-#line 9426 "parse.c"
+#line 9445 "parse.c"
     break;
 
   case 178: /* op: "<<"  */
-#line 3219 "parse.y"
+#line 3238 "parse.y"
                          { (yyval.id) = tLSHFT; }
-#line 9432 "parse.c"
+#line 9451 "parse.c"
     break;
 
   case 179: /* op: ">>"  */
-#line 3220 "parse.y"
+#line 3239 "parse.y"
                          { (yyval.id) = tRSHFT; }
-#line 9438 "parse.c"
+#line 9457 "parse.c"
     break;
 
   case 180: /* op: '+'  */
-#line 3221 "parse.y"
+#line 3240 "parse.y"
                        { (yyval.id) = '+'; }
-#line 9444 "parse.c"
+#line 9463 "parse.c"
     break;
 
   case 181: /* op: '-'  */
-#line 3222 "parse.y"
+#line 3241 "parse.y"
                        { (yyval.id) = '-'; }
-#line 9450 "parse.c"
+#line 9469 "parse.c"
     break;
 
   case 182: /* op: '*'  */
-#line 3223 "parse.y"
+#line 3242 "parse.y"
                        { (yyval.id) = '*'; }
-#line 9456 "parse.c"
+#line 9475 "parse.c"
     break;
 
   case 183: /* op: "*"  */
-#line 3224 "parse.y"
+#line 3243 "parse.y"
                          { (yyval.id) = '*'; }
-#line 9462 "parse.c"
+#line 9481 "parse.c"
     break;
 
   case 184: /* op: '/'  */
-#line 3225 "parse.y"
+#line 3244 "parse.y"
                        { (yyval.id) = '/'; }
-#line 9468 "parse.c"
+#line 9487 "parse.c"
     break;
 
   case 185: /* op: '%'  */
-#line 3226 "parse.y"
+#line 3245 "parse.y"
                        { (yyval.id) = '%'; }
-#line 9474 "parse.c"
+#line 9493 "parse.c"
     break;
 
   case 186: /* op: "**"  */
-#line 3227 "parse.y"
+#line 3246 "parse.y"
                         { (yyval.id) = tPOW; }
-#line 9480 "parse.c"
+#line 9499 "parse.c"
     break;
 
   case 187: /* op: "**arg"  */
-#line 3228 "parse.y"
+#line 3247 "parse.y"
                          { (yyval.id) = tDSTAR; }
-#line 9486 "parse.c"
+#line 9505 "parse.c"
     break;
 
   case 188: /* op: '!'  */
-#line 3229 "parse.y"
+#line 3248 "parse.y"
                        { (yyval.id) = '!'; }
-#line 9492 "parse.c"
+#line 9511 "parse.c"
     break;
 
   case 189: /* op: '~'  */
-#line 3230 "parse.y"
+#line 3249 "parse.y"
                        { (yyval.id) = '~'; }
-#line 9498 "parse.c"
+#line 9517 "parse.c"
     break;
 
   case 190: /* op: "unary+"  */
-#line 3231 "parse.y"
+#line 3250 "parse.y"
                          { (yyval.id) = tUPLUS; }
-#line 9504 "parse.c"
+#line 9523 "parse.c"
     break;
 
   case 191: /* op: "unary-"  */
-#line 3232 "parse.y"
+#line 3251 "parse.y"
                           { (yyval.id) = tUMINUS; }
-#line 9510 "parse.c"
+#line 9529 "parse.c"
     break;
 
   case 192: /* op: "[]"  */
-#line 3233 "parse.y"
+#line 3252 "parse.y"
                          { (yyval.id) = tAREF; }
-#line 9516 "parse.c"
+#line 9535 "parse.c"
     break;
 
   case 193: /* op: "[]="  */
-#line 3234 "parse.y"
+#line 3253 "parse.y"
                          { (yyval.id) = tASET; }
-#line 9522 "parse.c"
+#line 9541 "parse.c"
     break;
 
   case 194: /* op: '`'  */
-#line 3235 "parse.y"
+#line 3254 "parse.y"
                        { (yyval.id) = '`'; }
-#line 9528 "parse.c"
+#line 9547 "parse.c"
     break;
 
   case 236: /* asgn_arg_rhs: lhs '=' lex_ctxt arg_rhs  */
-#line 2371 "parse.y"
+#line 2390 "parse.y"
                     {
                         (yyval.node) = node_assign(p, (NODE *)(yyvsp[-3].node), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 9536 "parse.c"
+#line 9555 "parse.c"
     break;
 
   case 238: /* op_asgn_arg_rhs: var_lhs "operator-assignment" lex_ctxt arg_rhs  */
-#line 2485 "parse.y"
+#line 2504 "parse.y"
                     {
                         (yyval.node) = new_op_assign(p, (yyvsp[-3].node), (yyvsp[-2].id), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 9544 "parse.c"
+#line 9563 "parse.c"
     break;
 
   case 239: /* op_asgn_arg_rhs: primary_value '[' opt_call_args rbracket "operator-assignment" lex_ctxt arg_rhs  */
-#line 2489 "parse.y"
+#line 2508 "parse.y"
                     {
                         (yyval.node) = new_ary_op_assign(p, (yyvsp[-6].node), (yyvsp[-4].node), (yyvsp[-2].id), (yyvsp[0].node), &(yylsp[-4]), &(yyloc), &NULL_LOC, &(yylsp[-5]), &(yylsp[-3]), &(yylsp[-2]));
                     }
-#line 9552 "parse.c"
+#line 9571 "parse.c"
     break;
 
   case 240: /* op_asgn_arg_rhs: primary_value call_op "local variable or method" "operator-assignment" lex_ctxt arg_rhs  */
-#line 2493 "parse.y"
+#line 2512 "parse.y"
                     {
                         (yyval.node) = new_attr_op_assign(p, (yyvsp[-5].node), (yyvsp[-4].id), (yyvsp[-3].id), (yyvsp[-2].id), (yyvsp[0].node), &(yyloc), &(yylsp[-4]), &(yylsp[-3]), &(yylsp[-2]));
                     }
-#line 9560 "parse.c"
+#line 9579 "parse.c"
     break;
 
   case 241: /* op_asgn_arg_rhs: primary_value call_op "constant" "operator-assignment" lex_ctxt arg_rhs  */
-#line 2497 "parse.y"
+#line 2516 "parse.y"
                     {
                         (yyval.node) = new_attr_op_assign(p, (yyvsp[-5].node), (yyvsp[-4].id), (yyvsp[-3].id), (yyvsp[-2].id), (yyvsp[0].node), &(yyloc), &(yylsp[-4]), &(yylsp[-3]), &(yylsp[-2]));
                     }
-#line 9568 "parse.c"
+#line 9587 "parse.c"
     break;
 
   case 242: /* op_asgn_arg_rhs: primary_value "::" "local variable or method" "operator-assignment" lex_ctxt arg_rhs  */
-#line 2501 "parse.y"
+#line 2520 "parse.y"
                     {
                         (yyval.node) = new_attr_op_assign(p, (yyvsp[-5].node), idCOLON2, (yyvsp[-3].id), (yyvsp[-2].id), (yyvsp[0].node), &(yyloc), &(yylsp[-4]), &(yylsp[-3]), &(yylsp[-2]));
                     }
-#line 9576 "parse.c"
+#line 9595 "parse.c"
     break;
 
   case 243: /* op_asgn_arg_rhs: primary_value "::" "constant" "operator-assignment" lex_ctxt arg_rhs  */
-#line 2505 "parse.y"
+#line 2524 "parse.y"
                     {
                         YYLTYPE loc = code_loc_gen(&(yylsp[-5]), &(yylsp[-3]));
                         (yyval.node) = new_const_op_assign(p, NEW_COLON2((yyvsp[-5].node), (yyvsp[-3].id), &loc, &(yylsp[-4]), &(yylsp[-3])), (yyvsp[-2].id), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 9585 "parse.c"
+#line 9604 "parse.c"
     break;
 
   case 244: /* op_asgn_arg_rhs: ":: at EXPR_BEG" "constant" "operator-assignment" lex_ctxt arg_rhs  */
-#line 2510 "parse.y"
+#line 2529 "parse.y"
                     {
                         YYLTYPE loc = code_loc_gen(&(yylsp[-4]), &(yylsp[-3]));
                         (yyval.node) = new_const_op_assign(p, NEW_COLON3((yyvsp[-3].id), &loc, &(yylsp[-4]), &(yylsp[-3])), (yyvsp[-2].id), (yyvsp[0].node), (yyvsp[-1].ctxt), &(yyloc));
                     }
-#line 9594 "parse.c"
+#line 9613 "parse.c"
     break;
 
   case 245: /* op_asgn_arg_rhs: backref "operator-assignment" lex_ctxt arg_rhs  */
-#line 2515 "parse.y"
+#line 2534 "parse.y"
                     {
                         VALUE MAYBE_UNUSED(e) = rb_backref_error(p, (yyvsp[-3].node));
                         (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 9603 "parse.c"
+#line 9622 "parse.c"
     break;
 
   case 247: /* range_expr_arg: arg ".." arg  */
-#line 2534 "parse.y"
+#line 2553 "parse.y"
                     {
                         value_expr(p, (yyvsp[-2].node));
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = NEW_DOT2((yyvsp[-2].node), (yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 9613 "parse.c"
+#line 9632 "parse.c"
     break;
 
   case 248: /* range_expr_arg: arg "..." arg  */
-#line 2540 "parse.y"
+#line 2559 "parse.y"
                     {
                         value_expr(p, (yyvsp[-2].node));
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = NEW_DOT3((yyvsp[-2].node), (yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 9623 "parse.c"
+#line 9642 "parse.c"
     break;
 
   case 249: /* range_expr_arg: arg ".."  */
-#line 2546 "parse.y"
+#line 2565 "parse.y"
                     {
                         value_expr(p, (yyvsp[-1].node));
                         (yyval.node) = NEW_DOT2((yyvsp[-1].node), new_nil_at(p, NULL), &(yyloc), &(yylsp[0]));
                     }
-#line 9632 "parse.c"
+#line 9651 "parse.c"
     break;
 
   case 250: /* range_expr_arg: arg "..."  */
-#line 2551 "parse.y"
+#line 2570 "parse.y"
                     {
                         value_expr(p, (yyvsp[-1].node));
                         (yyval.node) = NEW_DOT3((yyvsp[-1].node), new_nil_at(p, NULL), &(yyloc), &(yylsp[0]));
                     }
-#line 9641 "parse.c"
+#line 9660 "parse.c"
     break;
 
   case 251: /* range_expr_arg: "(.." arg  */
-#line 2556 "parse.y"
+#line 2575 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = NEW_DOT2(new_nil_at(p, NULL), (yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 9650 "parse.c"
+#line 9669 "parse.c"
     break;
 
   case 252: /* range_expr_arg: "(..." arg  */
-#line 2561 "parse.y"
+#line 2580 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = NEW_DOT3(new_nil_at(p, NULL), (yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 9659 "parse.c"
+#line 9678 "parse.c"
     break;
 
   case 254: /* arg: arg '+' arg  */
-#line 3256 "parse.y"
+#line 3275 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), '+', (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9667 "parse.c"
+#line 9686 "parse.c"
     break;
 
   case 255: /* arg: arg '-' arg  */
-#line 3260 "parse.y"
+#line 3279 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), '-', (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9675 "parse.c"
+#line 9694 "parse.c"
     break;
 
   case 256: /* arg: arg '*' arg  */
-#line 3264 "parse.y"
+#line 3283 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), '*', (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9683 "parse.c"
+#line 9702 "parse.c"
     break;
 
   case 257: /* arg: arg '/' arg  */
-#line 3268 "parse.y"
+#line 3287 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), '/', (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9691 "parse.c"
+#line 9710 "parse.c"
     break;
 
   case 258: /* arg: arg '%' arg  */
-#line 3272 "parse.y"
+#line 3291 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), '%', (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9699 "parse.c"
+#line 9718 "parse.c"
     break;
 
   case 259: /* arg: arg "**" arg  */
-#line 3276 "parse.y"
+#line 3295 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), idPow, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9707 "parse.c"
+#line 9726 "parse.c"
     break;
 
   case 260: /* arg: tUMINUS_NUM simple_numeric "**" arg  */
-#line 3280 "parse.y"
+#line 3299 "parse.y"
                     {
                         (yyval.node) = call_uni_op(p, call_bin_op(p, (yyvsp[-2].node), idPow, (yyvsp[0].node), &(yylsp[-2]), &(yyloc)), idUMinus, &(yylsp[-3]), &(yyloc));
                     }
-#line 9715 "parse.c"
+#line 9734 "parse.c"
     break;
 
   case 261: /* arg: "unary+" arg  */
-#line 3284 "parse.y"
+#line 3303 "parse.y"
                     {
                         (yyval.node) = call_uni_op(p, (yyvsp[0].node), idUPlus, &(yylsp[-1]), &(yyloc));
                     }
-#line 9723 "parse.c"
+#line 9742 "parse.c"
     break;
 
   case 262: /* arg: "unary-" arg  */
-#line 3288 "parse.y"
+#line 3307 "parse.y"
                     {
                         (yyval.node) = call_uni_op(p, (yyvsp[0].node), idUMinus, &(yylsp[-1]), &(yyloc));
                     }
-#line 9731 "parse.c"
+#line 9750 "parse.c"
     break;
 
   case 263: /* arg: arg '|' arg  */
-#line 3292 "parse.y"
+#line 3311 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), '|', (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9739 "parse.c"
+#line 9758 "parse.c"
     break;
 
   case 264: /* arg: arg '^' arg  */
-#line 3296 "parse.y"
+#line 3315 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), '^', (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9747 "parse.c"
+#line 9766 "parse.c"
     break;
 
   case 265: /* arg: arg '&' arg  */
-#line 3300 "parse.y"
+#line 3319 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), '&', (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9755 "parse.c"
+#line 9774 "parse.c"
     break;
 
   case 266: /* arg: arg "<=>" arg  */
-#line 3304 "parse.y"
+#line 3323 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), idCmp, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9763 "parse.c"
+#line 9782 "parse.c"
     break;
 
   case 268: /* arg: arg "==" arg  */
-#line 3309 "parse.y"
+#line 3328 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), idEq, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9771 "parse.c"
+#line 9790 "parse.c"
     break;
 
   case 269: /* arg: arg "===" arg  */
-#line 3313 "parse.y"
+#line 3332 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), idEqq, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9779 "parse.c"
+#line 9798 "parse.c"
     break;
 
   case 270: /* arg: arg "!=" arg  */
-#line 3317 "parse.y"
+#line 3336 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), idNeq, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9787 "parse.c"
+#line 9806 "parse.c"
     break;
 
   case 271: /* arg: arg "=~" arg  */
-#line 3321 "parse.y"
+#line 3340 "parse.y"
                     {
                         (yyval.node) = match_op(p, (yyvsp[-2].node), (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9795 "parse.c"
+#line 9814 "parse.c"
     break;
 
   case 272: /* arg: arg "!~" arg  */
-#line 3325 "parse.y"
+#line 3344 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), idNeqTilde, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9803 "parse.c"
+#line 9822 "parse.c"
     break;
 
   case 273: /* arg: '!' arg  */
-#line 3329 "parse.y"
+#line 3348 "parse.y"
                     {
                         (yyval.node) = call_uni_op(p, method_cond(p, (yyvsp[0].node), &(yylsp[0])), '!', &(yylsp[-1]), &(yyloc));
                     }
-#line 9811 "parse.c"
+#line 9830 "parse.c"
     break;
 
   case 274: /* arg: '~' arg  */
-#line 3333 "parse.y"
+#line 3352 "parse.y"
                     {
                         (yyval.node) = call_uni_op(p, (yyvsp[0].node), '~', &(yylsp[-1]), &(yyloc));
                     }
-#line 9819 "parse.c"
+#line 9838 "parse.c"
     break;
 
   case 275: /* arg: arg "<<" arg  */
-#line 3337 "parse.y"
+#line 3356 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), idLTLT, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9827 "parse.c"
+#line 9846 "parse.c"
     break;
 
   case 276: /* arg: arg ">>" arg  */
-#line 3341 "parse.y"
+#line 3360 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), idGTGT, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9835 "parse.c"
+#line 9854 "parse.c"
     break;
 
   case 277: /* arg: arg "&&" arg  */
-#line 3345 "parse.y"
+#line 3364 "parse.y"
                     {
                         (yyval.node) = logop(p, idANDOP, (yyvsp[-2].node), (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9843 "parse.c"
+#line 9862 "parse.c"
     break;
 
   case 278: /* arg: arg "||" arg  */
-#line 3349 "parse.y"
+#line 3368 "parse.y"
                     {
                         (yyval.node) = logop(p, idOROP, (yyvsp[-2].node), (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9851 "parse.c"
+#line 9870 "parse.c"
     break;
 
   case 279: /* arg: "'defined?'" option_'\n' begin_defined arg  */
-#line 3353 "parse.y"
+#line 3372 "parse.y"
                     {
                         p->ctxt.in_defined = (yyvsp[-1].ctxt).in_defined;
                         (yyval.node) = new_defined(p, (yyvsp[0].node), &(yyloc), &(yylsp[-3]));
                         p->ctxt.has_trailing_semicolon = (yyvsp[-1].ctxt).has_trailing_semicolon;
                     }
-#line 9861 "parse.c"
+#line 9880 "parse.c"
     break;
 
   case 280: /* def_endless_method_endless_arg: defn_head f_opt_paren_args '=' endless_arg  */
-#line 2405 "parse.y"
+#line 2424 "parse.y"
                     {
                         endless_method_name(p, (yyvsp[-3].node_def_temp)->nd_mid, &(yylsp[-3]));
                         restore_defun(p, (yyvsp[-3].node_def_temp));
@@ -9869,11 +9888,11 @@ yyreduce:
                         (yyvsp[0].node) = new_scope_body(p, (yyvsp[-2].node_args), (yyvsp[0].node), (yyval.node), &(yyloc));
                         local_pop(p);
                     }
-#line 9873 "parse.c"
+#line 9892 "parse.c"
     break;
 
   case 281: /* def_endless_method_endless_arg: defs_head f_opt_paren_args '=' endless_arg  */
-#line 2413 "parse.y"
+#line 2432 "parse.y"
                     {
                         endless_method_name(p, (yyvsp[-3].node_def_temp)->nd_mid, &(yylsp[-3]));
                         restore_defun(p, (yyvsp[-3].node_def_temp));
@@ -9881,158 +9900,162 @@ yyreduce:
                         (yyvsp[0].node) = new_scope_body(p, (yyvsp[-2].node_args), (yyvsp[0].node), (yyval.node), &(yyloc));
                         local_pop(p);
                     }
-#line 9885 "parse.c"
+#line 9904 "parse.c"
     break;
 
   case 285: /* ternary: arg '?' arg option_'\n' ':' arg  */
-#line 3364 "parse.y"
+#line 3383 "parse.y"
                     {
                         value_expr(p, (yyvsp[-5].node));
-                        (yyval.node) = new_if(p, (yyvsp[-5].node), (yyvsp[-3].node), (yyvsp[0].node), &(yyloc), &NULL_LOC, &(yylsp[-1]), &NULL_LOC);
+                        {
+                            YYLTYPE else_loc = { (yylsp[-1]).beg, (yylsp[0]).end };
+                            NODE *else_clause = pm_yelse(p, (yyvsp[0].node), &(yylsp[-1]), &else_loc);
+                            (yyval.node) = new_if(p, (yyvsp[-5].node), (yyvsp[-3].node), else_clause, &(yyloc), &NULL_LOC, &(yylsp[-4]), &NULL_LOC);
+                        }
                         fixpos((yyval.node), (yyvsp[-5].node));
                     }
-#line 9895 "parse.c"
+#line 9918 "parse.c"
     break;
 
   case 287: /* endless_arg: endless_arg "'rescue' modifier" after_rescue arg  */
-#line 3373 "parse.y"
+#line 3396 "parse.y"
                     {
                         p->ctxt.in_rescue = (yyvsp[-1].ctxt).in_rescue;
                         (yyval.node) = rescued_expr(p, (yyvsp[-3].node), (yyvsp[0].node), &(yylsp[-3]), &(yylsp[-2]), &(yylsp[0]));
                     }
-#line 9904 "parse.c"
+#line 9927 "parse.c"
     break;
 
   case 288: /* endless_arg: "'not'" option_'\n' endless_arg  */
-#line 3378 "parse.y"
+#line 3401 "parse.y"
                     {
                         (yyval.node) = call_uni_op(p, method_cond(p, (yyvsp[0].node), &(yylsp[0])), METHOD_NOT, &(yylsp[-2]), &(yyloc));
                     }
-#line 9912 "parse.c"
+#line 9935 "parse.c"
     break;
 
   case 289: /* relop: '>'  */
-#line 3383 "parse.y"
+#line 3406 "parse.y"
               {(yyval.id) = '>';}
-#line 9918 "parse.c"
+#line 9941 "parse.c"
     break;
 
   case 290: /* relop: '<'  */
-#line 3384 "parse.y"
+#line 3407 "parse.y"
                        {(yyval.id) = '<';}
-#line 9924 "parse.c"
+#line 9947 "parse.c"
     break;
 
   case 291: /* relop: ">="  */
-#line 3385 "parse.y"
+#line 3408 "parse.y"
                        {(yyval.id) = idGE;}
-#line 9930 "parse.c"
+#line 9953 "parse.c"
     break;
 
   case 292: /* relop: "<="  */
-#line 3386 "parse.y"
+#line 3409 "parse.y"
                        {(yyval.id) = idLE;}
-#line 9936 "parse.c"
+#line 9959 "parse.c"
     break;
 
   case 293: /* rel_expr: arg relop arg  */
-#line 3390 "parse.y"
+#line 3413 "parse.y"
                     {
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), (yyvsp[-1].id), (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9944 "parse.c"
+#line 9967 "parse.c"
     break;
 
   case 294: /* rel_expr: rel_expr relop arg  */
-#line 3394 "parse.y"
+#line 3417 "parse.y"
                     {
                         rb_warning1("comparison '%s' after comparison", WARN_ID((yyvsp[-1].id)));
                         (yyval.node) = call_bin_op(p, (yyvsp[-2].node), (yyvsp[-1].id), (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 9953 "parse.c"
+#line 9976 "parse.c"
     break;
 
   case 295: /* lex_ctxt: none  */
-#line 3401 "parse.y"
+#line 3424 "parse.y"
                     {
                         (yyval.ctxt) = p->ctxt;
                     }
-#line 9961 "parse.c"
+#line 9984 "parse.c"
     break;
 
   case 296: /* begin_defined: lex_ctxt  */
-#line 3407 "parse.y"
+#line 3430 "parse.y"
                     {
                         p->ctxt.in_defined = 1;
                         (yyval.ctxt) = (yyvsp[0].ctxt);
                     }
-#line 9970 "parse.c"
+#line 9993 "parse.c"
     break;
 
   case 297: /* after_rescue: lex_ctxt  */
-#line 3414 "parse.y"
+#line 3437 "parse.y"
                     {
                         p->ctxt.in_rescue = after_rescue;
                         (yyval.ctxt) = (yyvsp[0].ctxt);
                     }
-#line 9979 "parse.c"
+#line 10002 "parse.c"
     break;
 
   case 298: /* value_expr_arg: arg  */
-#line 2569 "parse.y"
+#line 2588 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 9988 "parse.c"
+#line 10011 "parse.c"
     break;
 
   case 302: /* aref_args: args ',' assocs trailer  */
-#line 3426 "parse.y"
+#line 3449 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node) ? arg_append(p, (yyvsp[-3].node), new_hash(p, (yyvsp[-1].node), &(yylsp[-1])), &(yyloc)) : (yyvsp[-3].node);
                     }
-#line 9996 "parse.c"
+#line 10019 "parse.c"
     break;
 
   case 303: /* aref_args: assocs trailer  */
-#line 3430 "parse.y"
+#line 3453 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node) ? NEW_LIST(new_hash(p, (yyvsp[-1].node), &(yylsp[-1])), &(yyloc)) : 0;
                     }
-#line 10004 "parse.c"
+#line 10027 "parse.c"
     break;
 
   case 304: /* arg_rhs: arg  */
-#line 3436 "parse.y"
+#line 3459 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 10013 "parse.c"
+#line 10036 "parse.c"
     break;
 
   case 305: /* arg_rhs: arg "'rescue' modifier" after_rescue arg  */
-#line 3441 "parse.y"
+#line 3464 "parse.y"
                     {
                         p->ctxt.in_rescue = (yyvsp[-1].ctxt).in_rescue;
                         value_expr(p, (yyvsp[-3].node));
                         (yyval.node) = rescued_expr(p, (yyvsp[-3].node), (yyvsp[0].node), &(yylsp[-3]), &(yylsp[-2]), &(yylsp[0]));
                     }
-#line 10023 "parse.c"
+#line 10046 "parse.c"
     break;
 
   case 306: /* paren_args: '(' opt_call_args rparen  */
-#line 3449 "parse.y"
+#line 3472 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node);
                         pm_yparens_set(p, &(yylsp[-2]), &(yylsp[0]));
                     }
-#line 10032 "parse.c"
+#line 10055 "parse.c"
     break;
 
   case 307: /* paren_args: '(' args ',' args_forward rparen  */
-#line 3454 "parse.y"
+#line 3477 "parse.y"
                     {
                         if (!check_forwarding_args(p)) {
                             (yyval.node) = 0;
@@ -10041,11 +10064,11 @@ yyreduce:
                             (yyval.node) = new_args_forward_call(p, (yyvsp[-3].node), &(yylsp[-1]), &(yyloc));
                         }
                     }
-#line 10045 "parse.c"
+#line 10068 "parse.c"
     break;
 
   case 308: /* paren_args: '(' args_forward rparen  */
-#line 3463 "parse.y"
+#line 3486 "parse.y"
                     {
                         if (!check_forwarding_args(p)) {
                             (yyval.node) = 0;
@@ -10054,86 +10077,86 @@ yyreduce:
                             (yyval.node) = new_args_forward_call(p, 0, &(yylsp[-1]), &(yyloc));
                         }
                     }
-#line 10058 "parse.c"
+#line 10081 "parse.c"
     break;
 
   case 310: /* opt_paren_args: paren_args  */
-#line 3475 "parse.y"
+#line 3498 "parse.y"
                     {
                         (yyval.node) = (yyvsp[0].node) ? (yyvsp[0].node) : NODE_SPECIAL_EMPTY_ARGS;
                     }
-#line 10066 "parse.c"
+#line 10089 "parse.c"
     break;
 
   case 314: /* opt_call_args: args ',' assocs ','  */
-#line 3484 "parse.y"
+#line 3507 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node) ? arg_append(p, (yyvsp[-3].node), new_hash(p, (yyvsp[-1].node), &(yylsp[-1])), &(yyloc)) : (yyvsp[-3].node);
                     }
-#line 10074 "parse.c"
+#line 10097 "parse.c"
     break;
 
   case 315: /* opt_call_args: assocs ','  */
-#line 3488 "parse.y"
+#line 3511 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node) ? NEW_LIST(new_hash(p, (yyvsp[-1].node), &(yylsp[-1])), &(yylsp[-1])) : 0;
                     }
-#line 10082 "parse.c"
+#line 10105 "parse.c"
     break;
 
   case 316: /* value_expr_command: command  */
-#line 2569 "parse.y"
+#line 2588 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 10091 "parse.c"
+#line 10114 "parse.c"
     break;
 
   case 317: /* call_args: value_expr_command  */
-#line 3494 "parse.y"
+#line 3517 "parse.y"
                     {
                         (yyval.node) = NEW_LIST((yyvsp[0].node), &(yyloc));
                     }
-#line 10099 "parse.c"
+#line 10122 "parse.c"
     break;
 
   case 318: /* call_args: def_endless_method_endless_command  */
-#line 3498 "parse.y"
+#line 3521 "parse.y"
                     {
                         (yyval.node) = NEW_LIST((yyvsp[0].node), &(yyloc));
                     }
-#line 10107 "parse.c"
+#line 10130 "parse.c"
     break;
 
   case 319: /* call_args: args opt_block_arg  */
-#line 3502 "parse.y"
+#line 3525 "parse.y"
                     {
                         (yyval.node) = arg_blk_pass((yyvsp[-1].node), (yyvsp[0].node_block_pass));
                     }
-#line 10115 "parse.c"
+#line 10138 "parse.c"
     break;
 
   case 320: /* call_args: assocs opt_block_arg  */
-#line 3506 "parse.y"
+#line 3529 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node) ? NEW_LIST(new_hash(p, (yyvsp[-1].node), &(yylsp[-1])), &(yylsp[-1])) : 0;
                         (yyval.node) = arg_blk_pass((yyval.node), (yyvsp[0].node_block_pass));
                     }
-#line 10124 "parse.c"
+#line 10147 "parse.c"
     break;
 
   case 321: /* call_args: args ',' assocs opt_block_arg  */
-#line 3511 "parse.y"
+#line 3534 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node) ? arg_append(p, (yyvsp[-3].node), new_hash(p, (yyvsp[-1].node), &(yylsp[-1])), &(yyloc)) : (yyvsp[-3].node);
                         (yyval.node) = arg_blk_pass((yyval.node), (yyvsp[0].node_block_pass));
                     }
-#line 10133 "parse.c"
+#line 10156 "parse.c"
     break;
 
   case 323: /* $@13: %empty  */
-#line 3518 "parse.y"
+#line 3541 "parse.y"
                  {
                         /* If call_args starts with a open paren '(' or '[',
                          * look-ahead reading of the letters calls CMDARG_PUSH(0),
@@ -10151,11 +10174,11 @@ yyreduce:
                         CMDARG_PUSH(1);
                         if (lookahead) CMDARG_PUSH(0);
                     }
-#line 10155 "parse.c"
+#line 10178 "parse.c"
     break;
 
   case 324: /* command_args: $@13 call_args  */
-#line 3536 "parse.y"
+#line 3559 "parse.y"
                     {
                         /* call_args can be followed by tLBRACE_ARG (that does CMDARG_PUSH(0) in the lexer)
                          * but the push must be done after CMDARG_POP() in the parser.
@@ -10173,376 +10196,371 @@ yyreduce:
                         if (lookahead) CMDARG_PUSH(0);
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 10177 "parse.c"
+#line 10200 "parse.c"
     break;
 
   case 325: /* block_arg: "&" arg_value  */
-#line 3556 "parse.y"
+#line 3579 "parse.y"
                     {
                         (yyval.node_block_pass) = NEW_BLOCK_PASS((yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 10185 "parse.c"
+#line 10208 "parse.c"
     break;
 
   case 326: /* block_arg: "&"  */
-#line 3560 "parse.y"
+#line 3583 "parse.y"
                     {
                         forwarding_arg_check(p, idFWD_BLOCK, idFWD_ALL, "block");
                         (yyval.node_block_pass) = NEW_BLOCK_PASS(NEW_LVAR(idFWD_BLOCK, &(yylsp[0])), &(yyloc), &(yylsp[0]));
                     }
-#line 10194 "parse.c"
+#line 10217 "parse.c"
     break;
 
   case 327: /* opt_block_arg: ',' block_arg  */
-#line 3567 "parse.y"
+#line 3590 "parse.y"
                     {
                         (yyval.node_block_pass) = (yyvsp[0].node_block_pass);
                     }
-#line 10202 "parse.c"
+#line 10225 "parse.c"
     break;
 
   case 328: /* opt_block_arg: none  */
-#line 3571 "parse.y"
+#line 3594 "parse.y"
                     {
                         (yyval.node_block_pass) = 0;
                     }
-#line 10210 "parse.c"
+#line 10233 "parse.c"
     break;
 
   case 329: /* args: arg_value  */
-#line 3578 "parse.y"
+#line 3601 "parse.y"
                     {
                         (yyval.node) = NEW_LIST((yyvsp[0].node), &(yyloc));
                     }
-#line 10218 "parse.c"
+#line 10241 "parse.c"
     break;
 
   case 330: /* args: arg_splat  */
-#line 3582 "parse.y"
+#line 3605 "parse.y"
                     {
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 10226 "parse.c"
+#line 10249 "parse.c"
     break;
 
   case 331: /* args: args ',' arg_value  */
-#line 3586 "parse.y"
+#line 3609 "parse.y"
                     {
                         (yyval.node) = last_arg_append(p, (yyvsp[-2].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 10234 "parse.c"
+#line 10257 "parse.c"
     break;
 
   case 332: /* args: args ',' arg_splat  */
-#line 3590 "parse.y"
+#line 3613 "parse.y"
                     {
                         YSTUB("grammar"); /* PORTME: $$ = rest_arg_append(p, $non_last_args, RNODE_SPLAT($arg_splat)->nd_head, &@$); */
                     }
-#line 10242 "parse.c"
+#line 10265 "parse.c"
     break;
 
   case 333: /* arg_splat: "*" arg_value  */
-#line 3597 "parse.y"
+#line 3620 "parse.y"
                     {
                         (yyval.node) = NEW_SPLAT((yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 10250 "parse.c"
+#line 10273 "parse.c"
     break;
 
   case 334: /* arg_splat: "*"  */
-#line 3601 "parse.y"
+#line 3624 "parse.y"
                     {
                         forwarding_arg_check(p, idFWD_REST, idFWD_ALL, "rest");
                         (yyval.node) = NEW_SPLAT(NEW_LVAR(idFWD_REST, &(yylsp[0])), &(yyloc), &(yylsp[0]));
                     }
-#line 10259 "parse.c"
+#line 10282 "parse.c"
     break;
 
   case 337: /* mrhs: args ',' arg_value  */
-#line 3614 "parse.y"
+#line 3637 "parse.y"
                     {
                         (yyval.node) = last_arg_append(p, (yyvsp[-2].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 10267 "parse.c"
+#line 10290 "parse.c"
     break;
 
   case 338: /* mrhs: args ',' "*" arg_value  */
-#line 3618 "parse.y"
+#line 3641 "parse.y"
                     {
                         (yyval.node) = rest_arg_append(p, (yyvsp[-3].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 10275 "parse.c"
+#line 10298 "parse.c"
     break;
 
   case 339: /* mrhs: "*" arg_value  */
-#line 3622 "parse.y"
+#line 3645 "parse.y"
                     {
                         (yyval.node) = NEW_SPLAT((yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 10283 "parse.c"
+#line 10306 "parse.c"
     break;
 
   case 350: /* primary: "method"  */
-#line 3642 "parse.y"
+#line 3665 "parse.y"
                 {
                     (yyval.node) = (NODE *)NEW_FCALL((yyvsp[0].id), 0, &(yyloc));
                 }
-#line 10291 "parse.c"
+#line 10314 "parse.c"
     break;
 
   case 351: /* $@14: %empty  */
-#line 3646 "parse.y"
+#line 3669 "parse.y"
                 {
                     CMDARG_PUSH(0);
                 }
-#line 10299 "parse.c"
+#line 10322 "parse.c"
     break;
 
   case 352: /* primary: k_begin $@14 bodystmt k_end  */
-#line 3651 "parse.y"
+#line 3674 "parse.y"
                 {
                     CMDARG_POP();
-                    YSTUB("grammar"); /* PORTME: set_line_body($body, @kw.end_pos.lineno); */
                     (yyval.node) = NEW_BEGIN((yyvsp[-1].node), &(yyloc));
-                    nd_set_line((yyval.node), (yylsp[-3]).end_pos.lineno);
+                    (yyval.node) = pm_ybegin_keywords(p, (yyval.node), &(yylsp[-3]), &(yylsp[0]));
                 }
-#line 10310 "parse.c"
+#line 10332 "parse.c"
     break;
 
   case 353: /* $@15: %empty  */
-#line 3657 "parse.y"
+#line 3679 "parse.y"
                                                 {SET_LEX_STATE(EXPR_ENDARG);}
-#line 10316 "parse.c"
+#line 10338 "parse.c"
     break;
 
   case 354: /* primary: "( arg" compstmt_stmts $@15 ')'  */
-#line 3658 "parse.y"
+#line 3680 "parse.y"
                 {
-                    YSTUB("grammar"); /* PORTME: if (nd_type_p($body, NODE_SELF)) RNODE_SELF($body)->nd_state = 0; */
-                    (yyval.node) = (yyvsp[-2].node);
+                    (yyval.node) = pm_yparentheses(p, (yyvsp[-2].node), &(yylsp[-3]), &(yylsp[0]), &(yyloc));
                 }
-#line 10325 "parse.c"
+#line 10346 "parse.c"
     break;
 
   case 355: /* primary: "(" compstmt_stmts ')'  */
-#line 3663 "parse.y"
+#line 3684 "parse.y"
                 {
-                    YSTUB("grammar"); /* PORTME: if (nd_type_p($body, NODE_SELF)) RNODE_SELF($body)->nd_state = 0; */
-                    (yyval.node) = NEW_BLOCK((yyvsp[-1].node), &(yyloc));
+                    (yyval.node) = pm_yparentheses(p, (yyvsp[-1].node), &(yylsp[-2]), &(yylsp[0]), &(yyloc));
                 }
-#line 10334 "parse.c"
+#line 10354 "parse.c"
     break;
 
   case 356: /* primary: primary_value "::" "constant"  */
-#line 3668 "parse.y"
+#line 3688 "parse.y"
                 {
                     (yyval.node) = NEW_COLON2((yyvsp[-2].node), (yyvsp[0].id), &(yyloc), &(yylsp[-1]), &(yylsp[0]));
                 }
-#line 10342 "parse.c"
+#line 10362 "parse.c"
     break;
 
   case 357: /* primary: ":: at EXPR_BEG" "constant"  */
-#line 3672 "parse.y"
+#line 3692 "parse.y"
                 {
                     (yyval.node) = NEW_COLON3((yyvsp[0].id), &(yyloc), &(yylsp[-1]), &(yylsp[0]));
                 }
-#line 10350 "parse.c"
+#line 10370 "parse.c"
     break;
 
   case 358: /* primary: "[" aref_args ']'  */
-#line 3676 "parse.y"
+#line 3696 "parse.y"
                 {
                     (yyval.node) = make_list((yyvsp[-1].node), &(yyloc));
+                    (yyval.node) = pm_yarray_brackets(p, (yyval.node), &(yylsp[-2]), &(yylsp[0]), &(yyloc));
                 }
-#line 10358 "parse.c"
+#line 10379 "parse.c"
     break;
 
   case 359: /* primary: "{" assoc_list '}'  */
-#line 3680 "parse.y"
+#line 3701 "parse.y"
                 {
                     (yyval.node) = new_hash(p, (yyvsp[-1].node), &(yyloc));
                     YSTUB("grammar"); /* PORTME: RNODE_HASH($$)->nd_brace = TRUE; */
                 }
-#line 10367 "parse.c"
+#line 10388 "parse.c"
     break;
 
   case 360: /* primary: k_return  */
-#line 3685 "parse.y"
+#line 3706 "parse.y"
                 {
                     (yyval.node) = NEW_RETURN(0, &(yyloc), &(yylsp[0]));
                 }
-#line 10375 "parse.c"
+#line 10396 "parse.c"
     break;
 
   case 361: /* primary: k_yield '(' call_args rparen  */
-#line 3689 "parse.y"
+#line 3710 "parse.y"
                 {
                     (yyval.node) = NEW_YIELD((yyvsp[-1].node), &(yyloc), &(yylsp[-3]), &(yylsp[-2]), &(yylsp[0]));
                 }
-#line 10383 "parse.c"
+#line 10404 "parse.c"
     break;
 
   case 362: /* primary: k_yield '(' rparen  */
-#line 3693 "parse.y"
+#line 3714 "parse.y"
                 {
                     (yyval.node) = NEW_YIELD(0, &(yyloc), &(yylsp[-2]), &(yylsp[-1]), &(yylsp[0]));
                 }
-#line 10391 "parse.c"
+#line 10412 "parse.c"
     break;
 
   case 363: /* primary: k_yield  */
-#line 3697 "parse.y"
+#line 3718 "parse.y"
                 {
                     (yyval.node) = NEW_YIELD(0, &(yyloc), &(yylsp[0]), &NULL_LOC, &NULL_LOC);
                 }
-#line 10399 "parse.c"
+#line 10420 "parse.c"
     break;
 
   case 364: /* primary: "'defined?'" option_'\n' '(' begin_defined expr rparen  */
-#line 3701 "parse.y"
+#line 3722 "parse.y"
                 {
                     p->ctxt.in_defined = (yyvsp[-2].ctxt).in_defined;
                     (yyval.node) = new_defined(p, (yyvsp[-1].node), &(yyloc), &(yylsp[-5]));
                     p->ctxt.has_trailing_semicolon = (yyvsp[-2].ctxt).has_trailing_semicolon;
                 }
-#line 10409 "parse.c"
+#line 10430 "parse.c"
     break;
 
   case 365: /* primary: "'not'" '(' expr rparen  */
-#line 3707 "parse.y"
+#line 3728 "parse.y"
                 {
                     (yyval.node) = call_uni_op(p, method_cond(p, (yyvsp[-1].node), &(yylsp[-1])), METHOD_NOT, &(yylsp[-3]), &(yyloc));
                 }
-#line 10417 "parse.c"
+#line 10438 "parse.c"
     break;
 
   case 366: /* primary: "'not'" '(' rparen  */
-#line 3711 "parse.y"
+#line 3732 "parse.y"
                 {
                     (yyval.node) = call_uni_op(p, method_cond(p, NEW_NIL(&(yylsp[-1])), &(yylsp[-1])), METHOD_NOT, &(yylsp[-2]), &(yyloc));
                 }
-#line 10425 "parse.c"
+#line 10446 "parse.c"
     break;
 
   case 367: /* primary: fcall brace_block  */
-#line 3715 "parse.y"
+#line 3736 "parse.y"
                 {
                     (yyval.node) = method_add_block(p, (NODE *)(yyvsp[-1].node_fcall), (yyvsp[0].node), &(yyloc));
-                }
-#line 10433 "parse.c"
-    break;
-
-  case 369: /* primary: method_call brace_block  */
-#line 3720 "parse.y"
-                {
-                    block_dup_check(p, get_nd_args(p, (yyvsp[-1].node)), (yyvsp[0].node));
-                    (yyval.node) = method_add_block(p, (yyvsp[-1].node), (yyvsp[0].node), &(yyloc));
-                }
-#line 10442 "parse.c"
-    break;
-
-  case 371: /* primary: k_if expr_value then compstmt_stmts if_tail k_end  */
-#line 3729 "parse.y"
-                {
-                    if ((yyvsp[-1].node) && nd_type_p((yyvsp[-1].node), NODE_IF))
-                        YSTUB("grammar"); /* PORTME: RNODE_IF($tail)->end_keyword_loc = @k_end; */
-
-                    (yyval.node) = new_if(p, (yyvsp[-4].node), (yyvsp[-2].node), (yyvsp[-1].node), &(yyloc), &(yylsp[-5]), &(yylsp[-3]), &(yylsp[0]));
-                    fixpos((yyval.node), (yyvsp[-4].node));
                 }
 #line 10454 "parse.c"
     break;
 
-  case 372: /* primary: k_unless expr_value then compstmt_stmts opt_else k_end  */
-#line 3740 "parse.y"
+  case 369: /* primary: method_call brace_block  */
+#line 3741 "parse.y"
                 {
-                    (yyval.node) = new_unless(p, (yyvsp[-4].node), (yyvsp[-2].node), (yyvsp[-1].node), &(yyloc), &(yylsp[-5]), &(yylsp[-3]), &(yylsp[0]));
-                    fixpos((yyval.node), (yyvsp[-4].node));
+                    block_dup_check(p, get_nd_args(p, (yyvsp[-1].node)), (yyvsp[0].node));
+                    (yyval.node) = method_add_block(p, (yyvsp[-1].node), (yyvsp[0].node), &(yyloc));
                 }
 #line 10463 "parse.c"
     break;
 
+  case 371: /* primary: k_if expr_value then compstmt_stmts if_tail k_end  */
+#line 3750 "parse.y"
+                {
+                    (yyval.node) = new_if(p, (yyvsp[-4].node), (yyvsp[-2].node), (yyvsp[-1].node), &(yyloc), &(yylsp[-5]), &(yylsp[-3]), &(yylsp[0]));
+                    fixpos((yyval.node), (yyvsp[-4].node));
+                }
+#line 10472 "parse.c"
+    break;
+
+  case 372: /* primary: k_unless expr_value then compstmt_stmts opt_else k_end  */
+#line 3758 "parse.y"
+                {
+                    (yyval.node) = new_unless(p, (yyvsp[-4].node), (yyvsp[-2].node), (yyvsp[-1].node), &(yyloc), &(yylsp[-5]), &(yylsp[-3]), &(yylsp[0]));
+                    fixpos((yyval.node), (yyvsp[-4].node));
+                }
+#line 10481 "parse.c"
+    break;
+
   case 373: /* primary: k_while expr_value_do compstmt_stmts k_end  */
-#line 3747 "parse.y"
+#line 3765 "parse.y"
                 {
                     restore_block_exit(p, (yyvsp[-3].node_exits));
                     (yyval.node) = NEW_WHILE(cond(p, (yyvsp[-2].node), &(yylsp[-2])), (yyvsp[-1].node), 1, &(yyloc), &(yylsp[-3]), &(yylsp[0]));
                     fixpos((yyval.node), (yyvsp[-2].node));
                 }
-#line 10473 "parse.c"
+#line 10491 "parse.c"
     break;
 
   case 374: /* primary: k_until expr_value_do compstmt_stmts k_end  */
-#line 3755 "parse.y"
+#line 3773 "parse.y"
                 {
                     restore_block_exit(p, (yyvsp[-3].node_exits));
                     (yyval.node) = NEW_UNTIL(cond(p, (yyvsp[-2].node), &(yylsp[-2])), (yyvsp[-1].node), 1, &(yyloc), &(yylsp[-3]), &(yylsp[0]));
                     fixpos((yyval.node), (yyvsp[-2].node));
                 }
-#line 10483 "parse.c"
+#line 10501 "parse.c"
     break;
 
   case 375: /* @16: %empty  */
-#line 3761 "parse.y"
+#line 3779 "parse.y"
                 {
                     (yyval.labels) = p->case_labels;
                     p->case_labels = CHECK_LITERAL_WHEN;
                 }
-#line 10492 "parse.c"
+#line 10510 "parse.c"
     break;
 
   case 376: /* primary: k_case expr_value option_terms @16 case_body k_end  */
-#line 3767 "parse.y"
+#line 3785 "parse.y"
                 {
                     if (CASE_LABELS_ENABLED_P(p->case_labels)) st_free_table(p->case_labels);
                     p->case_labels = (yyvsp[-2].labels);
                     (yyval.node) = NEW_CASE((yyvsp[-4].node), (yyvsp[-1].node), &(yyloc), &(yylsp[-5]), &(yylsp[0]));
                     fixpos((yyval.node), (yyvsp[-4].node));
                 }
-#line 10503 "parse.c"
+#line 10521 "parse.c"
     break;
 
   case 377: /* @17: %empty  */
-#line 3774 "parse.y"
+#line 3792 "parse.y"
                 {
                     (yyval.labels) = p->case_labels;
                     p->case_labels = 0;
                 }
-#line 10512 "parse.c"
+#line 10530 "parse.c"
     break;
 
   case 378: /* primary: k_case option_terms @17 case_body k_end  */
-#line 3780 "parse.y"
+#line 3798 "parse.y"
                 {
                     if (p->case_labels) st_free_table(p->case_labels);
                     p->case_labels = (yyvsp[-2].labels);
                     (yyval.node) = NEW_CASE2((yyvsp[-1].node), &(yyloc), &(yylsp[-4]), &(yylsp[0]));
                 }
-#line 10522 "parse.c"
+#line 10540 "parse.c"
     break;
 
   case 379: /* primary: k_case expr_value option_terms p_case_body k_end  */
-#line 3788 "parse.y"
+#line 3806 "parse.y"
                 {
                     (yyval.node) = NEW_CASE3((yyvsp[-3].node), (yyvsp[-1].node), &(yyloc), &(yylsp[-4]), &(yylsp[0]));
                 }
-#line 10530 "parse.c"
+#line 10548 "parse.c"
     break;
 
   case 380: /* $@18: %empty  */
-#line 3792 "parse.y"
+#line 3810 "parse.y"
               {COND_PUSH(1);}
-#line 10536 "parse.c"
+#line 10554 "parse.c"
     break;
 
   case 381: /* $@19: %empty  */
-#line 3792 "parse.y"
+#line 3810 "parse.y"
                                                             {COND_POP();}
-#line 10542 "parse.c"
+#line 10560 "parse.c"
     break;
 
   case 382: /* primary: k_for for_var "'in'" $@18 expr_value do $@19 compstmt_stmts k_end  */
-#line 3795 "parse.y"
+#line 3813 "parse.y"
                 {
                     restore_block_exit(p, (yyvsp[-8].node_exits));
                     /*
@@ -10583,19 +10601,19 @@ yyreduce:
                     YSTUB("grammar"); /* PORTME: RNODE_SCOPE(scope)->nd_parent = $$; */
                     fixpos((yyval.node), (yyvsp[-7].node));
                 }
-#line 10587 "parse.c"
+#line 10605 "parse.c"
     break;
 
   case 383: /* $@20: %empty  */
-#line 3836 "parse.y"
+#line 3854 "parse.y"
                 {
                     begin_definition("class", &(yylsp[-2]), &(yylsp[-1]));
                 }
-#line 10595 "parse.c"
+#line 10613 "parse.c"
     break;
 
   case 384: /* primary: k_class cpath superclass $@20 bodystmt k_end  */
-#line 3841 "parse.y"
+#line 3859 "parse.y"
                 {
                     YYLTYPE inheritance_operator_loc = NULL_LOC;
                     if ((yyvsp[-3].node)) {
@@ -10611,19 +10629,19 @@ yyreduce:
                     p->ctxt.cant_return = (yyvsp[-5].ctxt).cant_return;
                     p->ctxt.shareable_constant_value = (yyvsp[-5].ctxt).shareable_constant_value;
                 }
-#line 10615 "parse.c"
+#line 10633 "parse.c"
     break;
 
   case 385: /* $@21: %empty  */
-#line 3857 "parse.y"
+#line 3875 "parse.y"
                 {
                     begin_definition("", &(yylsp[-2]), &(yylsp[-1]));
                 }
-#line 10623 "parse.c"
+#line 10641 "parse.c"
     break;
 
   case 386: /* primary: k_class "<<" expr_value $@21 term bodystmt k_end  */
-#line 3863 "parse.y"
+#line 3881 "parse.y"
                 {
                     (yyval.node) = NEW_SCLASS((yyvsp[-4].node), (yyvsp[-1].node), &(yyloc), &(yylsp[-6]), &(yylsp[-5]), &(yylsp[0]));
                     nd_set_line(RNODE_SCLASS((yyval.node))->nd_body, (yylsp[0]).end_pos.lineno);
@@ -10635,19 +10653,19 @@ yyreduce:
                     p->ctxt.cant_return = (yyvsp[-6].ctxt).cant_return;
                     p->ctxt.shareable_constant_value = (yyvsp[-6].ctxt).shareable_constant_value;
                 }
-#line 10639 "parse.c"
+#line 10657 "parse.c"
     break;
 
   case 387: /* $@22: %empty  */
-#line 3875 "parse.y"
+#line 3893 "parse.y"
                 {
                     begin_definition("module", &(yylsp[-1]), &(yylsp[0]));
                 }
-#line 10647 "parse.c"
+#line 10665 "parse.c"
     break;
 
   case 388: /* primary: k_module cpath $@22 bodystmt k_end  */
-#line 3880 "parse.y"
+#line 3898 "parse.y"
                 {
                     (yyval.node) = NEW_MODULE((yyvsp[-3].node), (yyvsp[-1].node), &(yyloc), &(yylsp[-4]), &(yylsp[0]));
                     nd_set_line(RNODE_MODULE((yyval.node))->nd_body, (yylsp[0]).end_pos.lineno);
@@ -10658,19 +10676,18 @@ yyreduce:
                     p->ctxt.cant_return = (yyvsp[-4].ctxt).cant_return;
                     p->ctxt.shareable_constant_value = (yyvsp[-4].ctxt).shareable_constant_value;
                 }
-#line 10662 "parse.c"
+#line 10680 "parse.c"
     break;
 
   case 389: /* $@23: %empty  */
-#line 3892 "parse.y"
+#line 3910 "parse.y"
                 {
-                    YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@head.beg_pos); */
                 }
-#line 10670 "parse.c"
+#line 10687 "parse.c"
     break;
 
   case 390: /* primary: defn_head f_arglist $@23 bodystmt k_end  */
-#line 3897 "parse.y"
+#line 3914 "parse.y"
                 {
                     restore_defun(p, (yyvsp[-4].node_def_temp));
                     YSTUB("grammar"); /* PORTME: ($$ = $head->nd_def)->nd_loc = @$; */
@@ -10678,19 +10695,18 @@ yyreduce:
                     YSTUB("grammar"); /* PORTME: RNODE_DEFN($$)->nd_defn = $bodystmt; */
                     local_pop(p);
                 }
-#line 10682 "parse.c"
+#line 10699 "parse.c"
     break;
 
   case 391: /* $@24: %empty  */
-#line 3906 "parse.y"
+#line 3923 "parse.y"
                 {
-                    YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@head.beg_pos); */
                 }
-#line 10690 "parse.c"
+#line 10706 "parse.c"
     break;
 
   case 392: /* primary: defs_head f_arglist $@24 bodystmt k_end  */
-#line 3911 "parse.y"
+#line 3927 "parse.y"
                 {
                     restore_defun(p, (yyvsp[-4].node_def_temp));
                     YSTUB("grammar"); /* PORTME: ($$ = $head->nd_def)->nd_loc = @$; */
@@ -10698,35 +10714,35 @@ yyreduce:
                     YSTUB("grammar"); /* PORTME: RNODE_DEFS($$)->nd_defn = $bodystmt; */
                     local_pop(p);
                 }
-#line 10702 "parse.c"
-    break;
-
-  case 393: /* primary: "'break'"  */
-#line 3919 "parse.y"
-                {
-                    (yyval.node) = add_block_exit(p, NEW_BREAK(0, &(yyloc), &(yylsp[0])));
-                }
-#line 10710 "parse.c"
-    break;
-
-  case 394: /* primary: "'next'"  */
-#line 3923 "parse.y"
-                {
-                    (yyval.node) = add_block_exit(p, NEW_NEXT(0, &(yyloc), &(yylsp[0])));
-                }
 #line 10718 "parse.c"
     break;
 
-  case 395: /* primary: "'redo'"  */
-#line 3927 "parse.y"
+  case 393: /* primary: "'break'"  */
+#line 3935 "parse.y"
                 {
-                    (yyval.node) = add_block_exit(p, NEW_REDO(&(yyloc), &(yylsp[0])));
+                    (yyval.node) = add_block_exit(p, NEW_BREAK(0, &(yyloc), &(yylsp[0])));
                 }
 #line 10726 "parse.c"
     break;
 
+  case 394: /* primary: "'next'"  */
+#line 3939 "parse.y"
+                {
+                    (yyval.node) = add_block_exit(p, NEW_NEXT(0, &(yyloc), &(yylsp[0])));
+                }
+#line 10734 "parse.c"
+    break;
+
+  case 395: /* primary: "'redo'"  */
+#line 3943 "parse.y"
+                {
+                    (yyval.node) = add_block_exit(p, NEW_REDO(&(yyloc), &(yylsp[0])));
+                }
+#line 10742 "parse.c"
+    break;
+
   case 396: /* primary: "'retry'"  */
-#line 3931 "parse.y"
+#line 3947 "parse.y"
                 {
                     if (!p->ctxt.in_defined) {
                         switch (p->ctxt.in_rescue) {
@@ -10738,29 +10754,28 @@ yyreduce:
                     }
                     (yyval.node) = NEW_RETRY(&(yyloc));
                 }
-#line 10742 "parse.c"
+#line 10758 "parse.c"
     break;
 
   case 397: /* value_expr_primary: primary  */
-#line 2569 "parse.y"
+#line 2588 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 10751 "parse.c"
+#line 10767 "parse.c"
     break;
 
   case 399: /* k_begin: "'begin'"  */
-#line 3948 "parse.y"
+#line 3964 "parse.y"
                     {
                         token_info_push(p, "begin", &(yyloc));
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
-#line 10760 "parse.c"
+#line 10775 "parse.c"
     break;
 
   case 400: /* k_if: "'if'"  */
-#line 3955 "parse.y"
+#line 3970 "parse.y"
                     {
                         WARN_EOL("if");
                         token_info_push(p, "if", &(yyloc));
@@ -10774,138 +10789,128 @@ yyreduce:
                                 p->token_info->nonspc = 0;
                             }
                         }
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
-#line 10780 "parse.c"
+#line 10794 "parse.c"
     break;
 
   case 401: /* k_unless: "'unless'"  */
-#line 3973 "parse.y"
+#line 3987 "parse.y"
                     {
                         token_info_push(p, "unless", &(yyloc));
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
-#line 10789 "parse.c"
+#line 10802 "parse.c"
     break;
 
   case 402: /* k_while: "'while'" allow_exits  */
-#line 3980 "parse.y"
+#line 3993 "parse.y"
                     {
                         (yyval.node_exits) = (yyvsp[0].node_exits);
                         token_info_push(p, "while", &(yyloc));
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@kw.beg_pos); */
                     }
-#line 10799 "parse.c"
+#line 10811 "parse.c"
     break;
 
   case 403: /* k_until: "'until'" allow_exits  */
-#line 3988 "parse.y"
+#line 4000 "parse.y"
                     {
                         (yyval.node_exits) = (yyvsp[0].node_exits);
                         token_info_push(p, "until", &(yyloc));
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@kw.beg_pos); */
                     }
-#line 10809 "parse.c"
+#line 10820 "parse.c"
     break;
 
   case 404: /* k_case: "'case'"  */
-#line 3996 "parse.y"
+#line 4007 "parse.y"
                     {
                         token_info_push(p, "case", &(yyloc));
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
-                    }
-#line 10818 "parse.c"
-    break;
-
-  case 405: /* k_for: "'for'" allow_exits  */
-#line 4003 "parse.y"
-                    {
-                        (yyval.node_exits) = (yyvsp[0].node_exits);
-                        token_info_push(p, "for", &(yyloc));
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@kw.beg_pos); */
                     }
 #line 10828 "parse.c"
     break;
 
+  case 405: /* k_for: "'for'" allow_exits  */
+#line 4013 "parse.y"
+                    {
+                        (yyval.node_exits) = (yyvsp[0].node_exits);
+                        token_info_push(p, "for", &(yyloc));
+                    }
+#line 10837 "parse.c"
+    break;
+
   case 406: /* k_class: "'class'"  */
-#line 4011 "parse.y"
+#line 4020 "parse.y"
                     {
                         token_info_push(p, "class", &(yyloc));
                         (yyval.ctxt) = p->ctxt;
                         p->ctxt.in_rescue = before_rescue;
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
-#line 10839 "parse.c"
+#line 10847 "parse.c"
     break;
 
   case 407: /* k_module: "'module'"  */
-#line 4020 "parse.y"
+#line 4028 "parse.y"
                     {
                         token_info_push(p, "module", &(yyloc));
                         (yyval.ctxt) = p->ctxt;
                         p->ctxt.in_rescue = before_rescue;
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
-#line 10850 "parse.c"
+#line 10857 "parse.c"
     break;
 
   case 408: /* k_def: "'def'"  */
-#line 4029 "parse.y"
+#line 4036 "parse.y"
                     {
                         token_info_push(p, "def", &(yyloc));
                         (yyval.node_def_temp) = NEW_DEF_TEMP(&(yyloc));
                         p->ctxt.in_argdef = 1;
                     }
-#line 10860 "parse.c"
+#line 10867 "parse.c"
     break;
 
   case 409: /* k_do: "'do'"  */
-#line 4037 "parse.y"
-                    {
-                        token_info_push(p, "do", &(yyloc));
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
-                    }
-#line 10869 "parse.c"
-    break;
-
-  case 410: /* k_do_block: "'do' for block"  */
 #line 4044 "parse.y"
                     {
                         token_info_push(p, "do", &(yyloc));
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
-#line 10878 "parse.c"
+#line 10875 "parse.c"
+    break;
+
+  case 410: /* k_do_block: "'do' for block"  */
+#line 4050 "parse.y"
+                    {
+                        token_info_push(p, "do", &(yyloc));
+                    }
+#line 10883 "parse.c"
     break;
 
   case 411: /* k_rescue: "'rescue'"  */
-#line 4051 "parse.y"
+#line 4056 "parse.y"
                     {
                         token_info_warn(p, "rescue", p->token_info, 1, &(yyloc));
                         (yyval.ctxt) = p->ctxt;
                         p->ctxt.in_rescue = after_rescue;
                     }
-#line 10888 "parse.c"
+#line 10893 "parse.c"
     break;
 
   case 412: /* k_ensure: "'ensure'"  */
-#line 4059 "parse.y"
+#line 4064 "parse.y"
                     {
                         token_info_warn(p, "ensure", p->token_info, 1, &(yyloc));
                         (yyval.ctxt) = p->ctxt;
                     }
-#line 10897 "parse.c"
+#line 10902 "parse.c"
     break;
 
   case 413: /* k_when: "'when'"  */
-#line 4066 "parse.y"
+#line 4071 "parse.y"
                     {
                         token_info_warn(p, "when", p->token_info, 0, &(yyloc));
                     }
-#line 10905 "parse.c"
+#line 10910 "parse.c"
     break;
 
   case 414: /* k_else: "'else'"  */
-#line 4072 "parse.y"
+#line 4077 "parse.y"
                     {
                         token_info *ptinfo_beg = p->token_info;
                         int same = ptinfo_beg && strcmp(ptinfo_beg->token, "case") != 0;
@@ -10918,520 +10923,520 @@ yyreduce:
                             if (!e.nonspc) *ptinfo_beg = e;
                         }
                     }
-#line 10922 "parse.c"
+#line 10927 "parse.c"
     break;
 
   case 415: /* k_elsif: "'elsif'"  */
-#line 4087 "parse.y"
+#line 4092 "parse.y"
                     {
                         WARN_EOL("elsif");
                         token_info_warn(p, "elsif", p->token_info, 1, &(yyloc));
                     }
-#line 10931 "parse.c"
+#line 10936 "parse.c"
     break;
 
   case 416: /* k_end: "'end'"  */
-#line 4094 "parse.y"
+#line 4099 "parse.y"
                     {
                         token_info_pop(p, "end", &(yyloc));
                         pop_end_expect_token_locations(p);
                     }
-#line 10940 "parse.c"
+#line 10945 "parse.c"
     break;
 
   case 417: /* k_end: "dummy end"  */
-#line 4099 "parse.y"
+#line 4104 "parse.y"
                     {
                         compile_error(p, "syntax error, unexpected end-of-input");
                     }
-#line 10948 "parse.c"
+#line 10953 "parse.c"
     break;
 
   case 418: /* k_return: "'return'"  */
-#line 4105 "parse.y"
+#line 4110 "parse.y"
                     {
                         if (p->ctxt.cant_return && !dyna_in_block(p))
                             yyerror1(&(yylsp[0]), "Invalid return in class/module body");
                     }
-#line 10957 "parse.c"
+#line 10962 "parse.c"
     break;
 
   case 419: /* k_yield: "'yield'"  */
-#line 4112 "parse.y"
+#line 4117 "parse.y"
                     {
                         if (!p->ctxt.in_defined && !p->ctxt.in_def && !compile_for_eval)
                             yyerror1(&(yylsp[0]), "Invalid yield");
                     }
-#line 10966 "parse.c"
+#line 10971 "parse.c"
     break;
 
   case 424: /* do: "'do' for condition"  */
-#line 4124 "parse.y"
-                                  { (yyval.id) = keyword_do_cond; }
-#line 10972 "parse.c"
+#line 4129 "parse.y"
+                                  { (yyval.id) = keyword_do_cond; p->ydo.loc = (yylsp[0]); p->ydo.set = 1; }
+#line 10977 "parse.c"
     break;
 
   case 426: /* if_tail: k_elsif expr_value then compstmt_stmts if_tail  */
-#line 4131 "parse.y"
+#line 4136 "parse.y"
                     {
                         (yyval.node) = new_if(p, (yyvsp[-3].node), (yyvsp[-1].node), (yyvsp[0].node), &(yyloc), &(yylsp[-4]), &(yylsp[-2]), &NULL_LOC);
                         fixpos((yyval.node), (yyvsp[-3].node));
                     }
-#line 10981 "parse.c"
+#line 10986 "parse.c"
     break;
 
   case 428: /* opt_else: k_else compstmt_stmts  */
-#line 4139 "parse.y"
+#line 4144 "parse.y"
                     {
-                        (yyval.node) = (yyvsp[0].node);
+                        (yyval.node) = pm_yelse(p, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                     }
-#line 10989 "parse.c"
+#line 10994 "parse.c"
     break;
 
   case 431: /* f_marg: f_norm_arg  */
-#line 4149 "parse.y"
+#line 4154 "parse.y"
                     {
                         (yyval.node) = assignable(p, (yyvsp[0].id), 0, &(yyloc));
                         mark_lvar_used(p, (yyval.node));
                     }
-#line 10998 "parse.c"
+#line 11003 "parse.c"
     break;
 
   case 432: /* f_marg: "(" f_margs rparen  */
-#line 4154 "parse.y"
+#line 4159 "parse.y"
                     {
                         (yyval.node) = (NODE *)(yyvsp[-1].node_masgn);
                     }
-#line 11006 "parse.c"
+#line 11011 "parse.c"
     break;
 
   case 433: /* mlhs_items_f_marg: f_marg  */
-#line 2474 "parse.y"
+#line 2493 "parse.y"
                     {
                         (yyval.node) = NEW_LIST((yyvsp[0].node), &(yyloc));
                     }
-#line 11014 "parse.c"
+#line 11019 "parse.c"
     break;
 
   case 434: /* mlhs_items_f_marg: mlhs_items_f_marg ',' f_marg  */
-#line 2478 "parse.y"
+#line 2497 "parse.y"
                     {
                         (yyval.node) = list_append(p, (yyvsp[-2].node), (yyvsp[0].node));
                     }
-#line 11022 "parse.c"
+#line 11027 "parse.c"
     break;
 
   case 435: /* f_margs: mlhs_items_f_marg  */
-#line 4161 "parse.y"
+#line 4166 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN((yyvsp[0].node), 0, &(yyloc));
                     }
-#line 11030 "parse.c"
+#line 11035 "parse.c"
     break;
 
   case 436: /* f_margs: mlhs_items_f_marg ',' f_rest_marg  */
-#line 4165 "parse.y"
+#line 4170 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN((yyvsp[-2].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 11038 "parse.c"
+#line 11043 "parse.c"
     break;
 
   case 437: /* f_margs: mlhs_items_f_marg ',' f_rest_marg ',' mlhs_items_f_marg  */
-#line 4169 "parse.y"
+#line 4174 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN((yyvsp[-4].node), NEW_POSTARG((yyvsp[-2].node), (yyvsp[0].node), &(yyloc)), &(yyloc));
                     }
-#line 11046 "parse.c"
+#line 11051 "parse.c"
     break;
 
   case 438: /* f_margs: f_rest_marg  */
-#line 4173 "parse.y"
+#line 4178 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN(0, (yyvsp[0].node), &(yyloc));
                     }
-#line 11054 "parse.c"
+#line 11059 "parse.c"
     break;
 
   case 439: /* f_margs: f_rest_marg ',' mlhs_items_f_marg  */
-#line 4177 "parse.y"
+#line 4182 "parse.y"
                     {
                         (yyval.node_masgn) = NEW_MASGN(0, NEW_POSTARG((yyvsp[-2].node), (yyvsp[0].node), &(yyloc)), &(yyloc));
                     }
-#line 11062 "parse.c"
+#line 11067 "parse.c"
     break;
 
   case 440: /* f_rest_marg: "*" f_norm_arg  */
-#line 4183 "parse.y"
+#line 4188 "parse.y"
                     {
                         (yyval.node) = assignable(p, (yyvsp[0].id), 0, &(yyloc));
                         mark_lvar_used(p, (yyval.node));
                     }
-#line 11071 "parse.c"
+#line 11076 "parse.c"
     break;
 
   case 441: /* f_rest_marg: "*"  */
-#line 4188 "parse.y"
+#line 4193 "parse.y"
                     {
                         (yyval.node) = NODE_SPECIAL_NO_NAME_REST;
                     }
-#line 11079 "parse.c"
+#line 11084 "parse.c"
     break;
 
   case 443: /* f_any_kwrest: f_no_kwarg  */
-#line 4195 "parse.y"
+#line 4200 "parse.y"
                     {
                         (yyval.id) = idNil;
                     }
-#line 11087 "parse.c"
+#line 11092 "parse.c"
     break;
 
   case 444: /* $@25: %empty  */
-#line 4200 "parse.y"
+#line 4205 "parse.y"
         {p->ctxt.in_argdef = 0;}
-#line 11093 "parse.c"
+#line 11098 "parse.c"
     break;
 
   case 446: /* f_kw_primary_value: f_label primary_value  */
-#line 2450 "parse.y"
+#line 2469 "parse.y"
                     {
                         p->ctxt.in_argdef = 1;
                         (yyval.node_kw_arg) = new_kw_arg(p, assignable(p, (yyvsp[-1].id), (yyvsp[0].node), &(yyloc)), &(yyloc));
                     }
-#line 11102 "parse.c"
+#line 11107 "parse.c"
     break;
 
   case 447: /* f_kw_primary_value: f_label  */
-#line 2455 "parse.y"
+#line 2474 "parse.y"
                     {
                         p->ctxt.in_argdef = 1;
                         (yyval.node_kw_arg) = new_kw_arg(p, assignable(p, (yyvsp[0].id), NODE_SPECIAL_REQUIRED_KEYWORD, &(yyloc)), &(yyloc));
                     }
-#line 11111 "parse.c"
+#line 11116 "parse.c"
     break;
 
   case 448: /* f_kwarg_primary_value: f_kw_primary_value  */
-#line 2463 "parse.y"
+#line 2482 "parse.y"
                     {
                         (yyval.node_kw_arg) = (yyvsp[0].node_kw_arg);
                     }
-#line 11119 "parse.c"
+#line 11124 "parse.c"
     break;
 
   case 449: /* f_kwarg_primary_value: f_kwarg_primary_value ',' f_kw_primary_value  */
-#line 2467 "parse.y"
+#line 2486 "parse.y"
                     {
                         (yyval.node_kw_arg) = kwd_append((yyvsp[-2].node_kw_arg), (yyvsp[0].node_kw_arg));
                     }
-#line 11127 "parse.c"
+#line 11132 "parse.c"
     break;
 
   case 450: /* opt_f_block_arg_none: ',' f_block_arg  */
-#line 2397 "parse.y"
+#line 2416 "parse.y"
                     {
                         (yyval.id) = (yyvsp[0].id);
                     }
-#line 11135 "parse.c"
+#line 11140 "parse.c"
     break;
 
   case 452: /* args_tail_basic_primary_value_none: f_kwarg_primary_value ',' f_kwrest opt_f_block_arg_none  */
-#line 2378 "parse.y"
+#line 2397 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, (yyvsp[-3].node_kw_arg), (yyvsp[-1].id), (yyvsp[0].id), &(yylsp[-1]));
                     }
-#line 11143 "parse.c"
+#line 11148 "parse.c"
     break;
 
   case 453: /* args_tail_basic_primary_value_none: f_kwarg_primary_value opt_f_block_arg_none  */
-#line 2382 "parse.y"
+#line 2401 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, (yyvsp[-1].node_kw_arg), 0, (yyvsp[0].id), &(yylsp[-1]));
                     }
-#line 11151 "parse.c"
+#line 11156 "parse.c"
     break;
 
   case 454: /* args_tail_basic_primary_value_none: f_any_kwrest opt_f_block_arg_none  */
-#line 2386 "parse.y"
+#line 2405 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, 0, (yyvsp[-1].id), (yyvsp[0].id), &(yylsp[-1]));
                     }
-#line 11159 "parse.c"
+#line 11164 "parse.c"
     break;
 
   case 455: /* args_tail_basic_primary_value_none: f_block_arg  */
-#line 2390 "parse.y"
+#line 2409 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, 0, 0, (yyvsp[0].id), &(yylsp[0]));
                     }
-#line 11167 "parse.c"
+#line 11172 "parse.c"
     break;
 
   case 457: /* excessed_comma: ','  */
-#line 4206 "parse.y"
+#line 4211 "parse.y"
                     {
                         /* magic number for rest_id in iseq_set_arguments() */
                         (yyval.id) = NODE_SPECIAL_EXCESSIVE_COMMA;
                     }
-#line 11176 "parse.c"
+#line 11181 "parse.c"
     break;
 
   case 458: /* f_opt_primary_value: f_arg_asgn f_eq primary_value  */
-#line 2431 "parse.y"
+#line 2450 "parse.y"
                     {
                         p->ctxt.in_argdef = 1;
                         (yyval.node_opt_arg) = NEW_OPT_ARG(assignable(p, (yyvsp[-2].id), (yyvsp[0].node), &(yyloc)), &(yyloc));
                     }
-#line 11185 "parse.c"
+#line 11190 "parse.c"
     break;
 
   case 459: /* f_opt_arg_primary_value: f_opt_primary_value  */
-#line 2439 "parse.y"
+#line 2458 "parse.y"
                     {
                         (yyval.node_opt_arg) = (yyvsp[0].node_opt_arg);
                     }
-#line 11193 "parse.c"
+#line 11198 "parse.c"
     break;
 
   case 460: /* f_opt_arg_primary_value: f_opt_arg_primary_value ',' f_opt_primary_value  */
-#line 2443 "parse.y"
+#line 2462 "parse.y"
                     {
                         (yyval.node_opt_arg) = opt_arg_append((yyvsp[-2].node_opt_arg), (yyvsp[0].node_opt_arg));
                     }
-#line 11201 "parse.c"
+#line 11206 "parse.c"
     break;
 
   case 461: /* opt_args_tail_block_args_tail_none: ',' block_args_tail  */
-#line 2523 "parse.y"
+#line 2542 "parse.y"
                     {
                         (yyval.node_args) = (yyvsp[0].node_args);
                     }
-#line 11209 "parse.c"
+#line 11214 "parse.c"
     break;
 
   case 462: /* opt_args_tail_block_args_tail_none: none  */
-#line 2527 "parse.y"
+#line 2546 "parse.y"
                     {
                         (yyval.node_args) = new_empty_args_tail(p, &(yyloc));
                     }
-#line 11217 "parse.c"
+#line 11222 "parse.c"
     break;
 
   case 463: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_arg ',' f_opt_arg_primary_value ',' f_rest_arg opt_args_tail_block_args_tail_none  */
-#line 5341 "parse.y"
+#line 5345 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-5].node_args_aux), (yyvsp[-3].node_opt_arg), (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11225 "parse.c"
+#line 11230 "parse.c"
     break;
 
   case 464: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_arg ',' f_opt_arg_primary_value ',' f_rest_arg ',' f_arg opt_args_tail_block_args_tail_none  */
-#line 5345 "parse.y"
+#line 5349 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-7].node_args_aux), (yyvsp[-5].node_opt_arg), (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11233 "parse.c"
+#line 11238 "parse.c"
     break;
 
   case 465: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_arg ',' f_opt_arg_primary_value opt_args_tail_block_args_tail_none  */
-#line 5349 "parse.y"
+#line 5353 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-3].node_args_aux), (yyvsp[-1].node_opt_arg), 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11241 "parse.c"
+#line 11246 "parse.c"
     break;
 
   case 466: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_arg ',' f_opt_arg_primary_value ',' f_arg opt_args_tail_block_args_tail_none  */
-#line 5353 "parse.y"
+#line 5357 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-5].node_args_aux), (yyvsp[-3].node_opt_arg), 0, (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11249 "parse.c"
+#line 11254 "parse.c"
     break;
 
   case 467: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_arg ',' f_rest_arg opt_args_tail_block_args_tail_none  */
-#line 5357 "parse.y"
+#line 5361 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-3].node_args_aux), 0, (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11257 "parse.c"
+#line 11262 "parse.c"
     break;
 
   case 468: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_arg ',' f_rest_arg ',' f_arg opt_args_tail_block_args_tail_none  */
-#line 5361 "parse.y"
+#line 5365 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-5].node_args_aux), 0, (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11265 "parse.c"
+#line 11270 "parse.c"
     break;
 
   case 469: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_opt_arg_primary_value ',' f_rest_arg opt_args_tail_block_args_tail_none  */
-#line 5365 "parse.y"
+#line 5369 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-3].node_opt_arg), (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11273 "parse.c"
+#line 11278 "parse.c"
     break;
 
   case 470: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_opt_arg_primary_value ',' f_rest_arg ',' f_arg opt_args_tail_block_args_tail_none  */
-#line 5369 "parse.y"
+#line 5373 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-5].node_opt_arg), (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11281 "parse.c"
+#line 11286 "parse.c"
     break;
 
   case 471: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_opt_arg_primary_value opt_args_tail_block_args_tail_none  */
-#line 5373 "parse.y"
+#line 5377 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-1].node_opt_arg), 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11289 "parse.c"
+#line 11294 "parse.c"
     break;
 
   case 472: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_opt_arg_primary_value ',' f_arg opt_args_tail_block_args_tail_none  */
-#line 5377 "parse.y"
+#line 5381 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-3].node_opt_arg), 0, (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11297 "parse.c"
+#line 11302 "parse.c"
     break;
 
   case 473: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_rest_arg opt_args_tail_block_args_tail_none  */
-#line 5381 "parse.y"
+#line 5385 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, 0, (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11305 "parse.c"
+#line 11310 "parse.c"
     break;
 
   case 474: /* args-list_primary_value_opt_args_tail_block_args_tail_none: f_rest_arg ',' f_arg opt_args_tail_block_args_tail_none  */
-#line 5385 "parse.y"
+#line 5389 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, 0, (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11313 "parse.c"
+#line 11318 "parse.c"
     break;
 
   case 476: /* block_param: f_arg excessed_comma  */
-#line 4214 "parse.y"
+#line 4219 "parse.y"
                     {
                         (yyval.node_args) = new_empty_args_tail(p, &(yylsp[0]));
                         (yyval.node_args) = new_args(p, (yyvsp[-1].node_args_aux), 0, (yyvsp[0].id), 0, (yyval.node_args), &(yyloc));
                     }
-#line 11322 "parse.c"
+#line 11327 "parse.c"
     break;
 
   case 477: /* block_param: f_arg opt_args_tail_block_args_tail_none  */
-#line 4219 "parse.y"
+#line 4224 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-1].node_args_aux), 0, 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11330 "parse.c"
+#line 11335 "parse.c"
     break;
 
   case 478: /* tail-only-args_block_args_tail: block_args_tail  */
-#line 5392 "parse.y"
+#line 5396 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, 0, 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 11338 "parse.c"
+#line 11343 "parse.c"
     break;
 
   case 481: /* opt_block_param_def: block_param_def  */
-#line 4227 "parse.y"
+#line 4232 "parse.y"
                         {
                             p->command_start = TRUE;
                         }
-#line 11346 "parse.c"
+#line 11351 "parse.c"
     break;
 
   case 482: /* block_param_def: '|' opt_block_param opt_bv_decl '|'  */
-#line 4233 "parse.y"
+#line 4238 "parse.y"
                     {
                         p->max_numparam = ORDINAL_PARAM;
                         p->ctxt.in_argdef = 0;
                         (yyval.node_args) = (yyvsp[-2].node_args);
                     }
-#line 11356 "parse.c"
+#line 11361 "parse.c"
     break;
 
   case 483: /* opt_block_param: %empty  */
-#line 4241 "parse.y"
+#line 4246 "parse.y"
                     {
                         (yyval.node_args) = 0;
                     }
-#line 11364 "parse.c"
+#line 11369 "parse.c"
     break;
 
   case 485: /* opt_bv_decl: option_'\n'  */
-#line 4248 "parse.y"
+#line 4253 "parse.y"
                     {
                         (yyval.id) = 0;
                     }
-#line 11372 "parse.c"
+#line 11377 "parse.c"
     break;
 
   case 486: /* opt_bv_decl: option_'\n' ';' bv_decls option_'\n'  */
-#line 4252 "parse.y"
+#line 4257 "parse.y"
                     {
                         (yyval.id) = 0;
                     }
-#line 11380 "parse.c"
+#line 11385 "parse.c"
     break;
 
   case 489: /* bvar: "local variable or method"  */
-#line 4262 "parse.y"
+#line 4267 "parse.y"
                     {
                         new_bv(p, (yyvsp[0].id));
                     }
-#line 11388 "parse.c"
+#line 11393 "parse.c"
     break;
 
   case 491: /* max_numparam: %empty  */
-#line 4268 "parse.y"
+#line 4273 "parse.y"
                  {
                         (yyval.num) = p->max_numparam;
                         p->max_numparam = 0;
                     }
-#line 11397 "parse.c"
+#line 11402 "parse.c"
     break;
 
   case 492: /* numparam: %empty  */
-#line 4274 "parse.y"
+#line 4279 "parse.y"
              {
                         (yyval.node) = numparam_push(p);
                     }
-#line 11405 "parse.c"
+#line 11410 "parse.c"
     break;
 
   case 493: /* it_id: %empty  */
-#line 4279 "parse.y"
+#line 4284 "parse.y"
            {
                         (yyval.id) = p->it_id;
                         p->it_id = 0;
                     }
-#line 11414 "parse.c"
+#line 11419 "parse.c"
     break;
 
   case 494: /* @26: %empty  */
-#line 4286 "parse.y"
+#line 4291 "parse.y"
                     {
                         token_info_push(p, "->", &(yylsp[0]));
                         (yyval.vars) = dyna_push(p);
                     }
-#line 11423 "parse.c"
+#line 11428 "parse.c"
     break;
 
   case 495: /* $@27: %empty  */
-#line 4292 "parse.y"
+#line 4297 "parse.y"
                     {
                         CMDARG_PUSH(0);
                     }
-#line 11431 "parse.c"
+#line 11436 "parse.c"
     break;
 
   case 496: /* lambda: "->" @26 max_numparam numparam it_id allow_exits f_larglist $@27 lambda_body  */
-#line 4296 "parse.y"
+#line 4301 "parse.y"
                     {
                         int max_numparam = p->max_numparam;
                         ID it_id = p->it_id;
@@ -11452,75 +11457,74 @@ yyreduce:
                         numparam_pop(p, (yyvsp[-5].node));
                         dyna_pop(p, (yyvsp[-7].vars));
                     }
-#line 11456 "parse.c"
+#line 11461 "parse.c"
     break;
 
   case 497: /* f_larglist: '(' f_largs opt_bv_decl ')'  */
-#line 4319 "parse.y"
+#line 4324 "parse.y"
                     {
                         p->ctxt.in_argdef = 0;
                         (yyval.node_args) = (yyvsp[-2].node_args);
                         p->max_numparam = ORDINAL_PARAM;
                     }
-#line 11466 "parse.c"
+#line 11471 "parse.c"
     break;
 
   case 498: /* f_larglist: f_largs  */
-#line 4325 "parse.y"
+#line 4330 "parse.y"
                     {
                         p->ctxt.in_argdef = 0;
                         if (0) /* PORTME: args_info_empty_p on the ported parameter builder */
                             p->max_numparam = ORDINAL_PARAM;
                         (yyval.node_args) = (yyvsp[0].node_args);
                     }
-#line 11477 "parse.c"
+#line 11482 "parse.c"
     break;
 
   case 499: /* lambda_body: tLAMBEG compstmt_stmts '}'  */
-#line 4334 "parse.y"
+#line 4339 "parse.y"
                     {
                         token_info_pop(p, "}", &(yylsp[0]));
                         (yyval.locations_lambda_body) = new_locations_lambda_body(p, (yyvsp[-1].node), &(yylsp[-1]), &(yylsp[-2]), &(yylsp[0]));
                     }
-#line 11486 "parse.c"
+#line 11491 "parse.c"
     break;
 
   case 500: /* $@28: %empty  */
-#line 4339 "parse.y"
+#line 4344 "parse.y"
                     {
-                        YSTUB("grammar"); /* PORTME: push_end_expect_token_locations(p, &@1.beg_pos); */
                     }
-#line 11494 "parse.c"
+#line 11498 "parse.c"
     break;
 
   case 501: /* lambda_body: "'do' for lambda" $@28 bodystmt k_end  */
-#line 4343 "parse.y"
+#line 4347 "parse.y"
                     {
                         (yyval.locations_lambda_body) = new_locations_lambda_body(p, (yyvsp[-1].node), &(yylsp[-1]), &(yylsp[-3]), &(yylsp[0]));
                     }
-#line 11502 "parse.c"
+#line 11506 "parse.c"
     break;
 
   case 502: /* do_block: k_do_block do_body k_end  */
-#line 4349 "parse.y"
+#line 4353 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node);
                         set_embraced_location((yyval.node), &(yylsp[-2]), &(yylsp[0]));
                     }
-#line 11511 "parse.c"
+#line 11515 "parse.c"
     break;
 
   case 503: /* block_call: command do_block  */
-#line 4356 "parse.y"
+#line 4360 "parse.y"
                     {
                         (yyval.node) = command_add_block(p, (yyvsp[-1].node), (yyvsp[0].node), &(yyloc));
                         fixpos((yyval.node), (yyvsp[-1].node));
                     }
-#line 11520 "parse.c"
+#line 11524 "parse.c"
     break;
 
   case 504: /* block_call: block_call call_op2 operation2 opt_paren_args  */
-#line 4361 "parse.y"
+#line 4365 "parse.y"
                     {
                         bool has_args = (yyvsp[0].node) != 0;
                         if (NODE_EMPTY_ARGS_P((yyvsp[0].node))) (yyvsp[0].node) = 0;
@@ -11528,45 +11532,45 @@ yyreduce:
                         if (has_args) {
                         }
                     }
-#line 11532 "parse.c"
+#line 11536 "parse.c"
     break;
 
   case 505: /* block_call: block_call call_op2 operation2 opt_paren_args brace_block  */
-#line 4369 "parse.y"
+#line 4373 "parse.y"
                     {
                         if (NODE_EMPTY_ARGS_P((yyvsp[-1].node))) (yyvsp[-1].node) = 0;
                         (yyval.node) = new_command_qcall(p, (yyvsp[-3].id), (yyvsp[-4].node), (yyvsp[-2].id), (yyvsp[-1].node), (yyvsp[0].node), &(yylsp[-2]), &(yyloc));
                     }
-#line 11541 "parse.c"
+#line 11545 "parse.c"
     break;
 
   case 506: /* block_call: block_call call_op2 operation2 command_args do_block  */
-#line 4374 "parse.y"
+#line 4378 "parse.y"
                     {
                         (yyval.node) = new_command_qcall(p, (yyvsp[-3].id), (yyvsp[-4].node), (yyvsp[-2].id), (yyvsp[-1].node), (yyvsp[0].node), &(yylsp[-2]), &(yyloc));
                     }
-#line 11549 "parse.c"
+#line 11553 "parse.c"
     break;
 
   case 507: /* block_call: block_call call_op2 paren_args  */
-#line 4378 "parse.y"
+#line 4382 "parse.y"
                     {
                         (yyval.node) = new_qcall(p, (yyvsp[-1].id), (yyvsp[-2].node), idCall, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                         nd_set_line((yyval.node), (yylsp[-1]).end_pos.lineno);
                     }
-#line 11558 "parse.c"
+#line 11562 "parse.c"
     break;
 
   case 508: /* method_call: fcall paren_args  */
-#line 4385 "parse.y"
+#line 4389 "parse.y"
                     {
                         (yyval.node) = pm_yfcall_args(p, (NODE *)(yyvsp[-1].node_fcall), (yyvsp[0].node), &(yyloc));
                     }
-#line 11566 "parse.c"
+#line 11570 "parse.c"
     break;
 
   case 509: /* method_call: primary_value call_op operation2 opt_paren_args  */
-#line 4389 "parse.y"
+#line 4393 "parse.y"
                     {
                         bool has_args = (yyvsp[0].node) != 0;
                         if (NODE_EMPTY_ARGS_P((yyvsp[0].node))) (yyvsp[0].node) = 0;
@@ -11575,37 +11579,37 @@ yyreduce:
                         if (has_args) {
                         }
                     }
-#line 11579 "parse.c"
+#line 11583 "parse.c"
     break;
 
   case 510: /* method_call: primary_value "::" operation2 paren_args  */
-#line 4398 "parse.y"
+#line 4402 "parse.y"
                     {
                         (yyval.node) = new_qcall(p, idCOLON2, (yyvsp[-3].node), (yyvsp[-1].id), (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                         nd_set_line((yyval.node), (yylsp[-1]).end_pos.lineno);
                     }
-#line 11588 "parse.c"
+#line 11592 "parse.c"
     break;
 
   case 511: /* method_call: primary_value "::" operation3  */
-#line 4403 "parse.y"
+#line 4407 "parse.y"
                     {
                         (yyval.node) = new_qcall(p, idCOLON2, (yyvsp[-2].node), (yyvsp[0].id), 0, &(yylsp[0]), &(yyloc));
                     }
-#line 11596 "parse.c"
+#line 11600 "parse.c"
     break;
 
   case 512: /* method_call: primary_value call_op2 paren_args  */
-#line 4407 "parse.y"
+#line 4411 "parse.y"
                     {
                         (yyval.node) = new_qcall(p, (yyvsp[-1].id), (yyvsp[-2].node), idCall, (yyvsp[0].node), &(yylsp[-1]), &(yyloc));
                         nd_set_line((yyval.node), (yylsp[-1]).end_pos.lineno);
                     }
-#line 11605 "parse.c"
+#line 11609 "parse.c"
     break;
 
   case 513: /* method_call: "'super'" paren_args  */
-#line 4412 "parse.y"
+#line 4416 "parse.y"
                     {
                         rb_code_location_t lparen_loc = (yylsp[0]);
                         rb_code_location_t rparen_loc = (yylsp[0]);
@@ -11614,52 +11618,52 @@ yyreduce:
 
                         (yyval.node) = NEW_SUPER((yyvsp[0].node), &(yyloc), &(yylsp[-1]), &lparen_loc, &rparen_loc);
                     }
-#line 11618 "parse.c"
+#line 11622 "parse.c"
     break;
 
   case 514: /* method_call: "'super'"  */
-#line 4421 "parse.y"
+#line 4425 "parse.y"
                     {
                         (yyval.node) = NEW_ZSUPER(&(yyloc));
                     }
-#line 11626 "parse.c"
+#line 11630 "parse.c"
     break;
 
   case 515: /* method_call: primary_value '[' opt_call_args rbracket  */
-#line 4425 "parse.y"
+#line 4429 "parse.y"
                     {
                         (yyval.node) = NEW_CALL((yyvsp[-3].node), tAREF, (yyvsp[-1].node), &(yyloc));
                         fixpos((yyval.node), (yyvsp[-3].node));
                     }
-#line 11635 "parse.c"
+#line 11639 "parse.c"
     break;
 
   case 516: /* brace_block: '{' brace_body '}'  */
-#line 4432 "parse.y"
+#line 4436 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node);
                         set_embraced_location((yyval.node), &(yylsp[-2]), &(yylsp[0]));
                     }
-#line 11644 "parse.c"
+#line 11648 "parse.c"
     break;
 
   case 517: /* brace_block: k_do do_body k_end  */
-#line 4437 "parse.y"
+#line 4441 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node);
                         set_embraced_location((yyval.node), &(yylsp[-2]), &(yylsp[0]));
                     }
-#line 11653 "parse.c"
+#line 11657 "parse.c"
     break;
 
   case 518: /* @29: %empty  */
-#line 4443 "parse.y"
+#line 4447 "parse.y"
              {(yyval.vars) = dyna_push(p);}
-#line 11659 "parse.c"
+#line 11663 "parse.c"
     break;
 
   case 519: /* brace_body: @29 max_numparam numparam it_id allow_exits opt_block_param_def compstmt_stmts  */
-#line 4446 "parse.y"
+#line 4450 "parse.y"
                     {
                         int max_numparam = p->max_numparam;
                         ID it_id = p->it_id;
@@ -11671,20 +11675,20 @@ yyreduce:
                         numparam_pop(p, (yyvsp[-4].node));
                         dyna_pop(p, (yyvsp[-6].vars));
                     }
-#line 11675 "parse.c"
+#line 11679 "parse.c"
     break;
 
   case 520: /* @30: %empty  */
-#line 4459 "parse.y"
+#line 4463 "parse.y"
              {
                         (yyval.vars) = dyna_push(p);
                         CMDARG_PUSH(0);
                     }
-#line 11684 "parse.c"
+#line 11688 "parse.c"
     break;
 
   case 521: /* do_body: @30 max_numparam numparam it_id allow_exits opt_block_param_def bodystmt  */
-#line 4465 "parse.y"
+#line 4469 "parse.y"
                     {
                         int max_numparam = p->max_numparam;
                         ID it_id = p->it_id;
@@ -11697,66 +11701,66 @@ yyreduce:
                         numparam_pop(p, (yyvsp[-4].node));
                         dyna_pop(p, (yyvsp[-6].vars));
                     }
-#line 11701 "parse.c"
+#line 11705 "parse.c"
     break;
 
   case 522: /* case_args: arg_value  */
-#line 4480 "parse.y"
+#line 4484 "parse.y"
                     {
                         check_literal_when(p, (yyvsp[0].node), &(yylsp[0]));
                         (yyval.node) = NEW_LIST((yyvsp[0].node), &(yyloc));
                     }
-#line 11710 "parse.c"
+#line 11714 "parse.c"
     break;
 
   case 523: /* case_args: "*" arg_value  */
-#line 4485 "parse.y"
+#line 4489 "parse.y"
                     {
                         (yyval.node) = NEW_SPLAT((yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 11718 "parse.c"
+#line 11722 "parse.c"
     break;
 
   case 524: /* case_args: case_args ',' arg_value  */
-#line 4489 "parse.y"
+#line 4493 "parse.y"
                     {
                         check_literal_when(p, (yyvsp[0].node), &(yylsp[0]));
                         (yyval.node) = last_arg_append(p, (yyvsp[-2].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 11727 "parse.c"
+#line 11731 "parse.c"
     break;
 
   case 525: /* case_args: case_args ',' "*" arg_value  */
-#line 4494 "parse.y"
+#line 4498 "parse.y"
                     {
                         (yyval.node) = rest_arg_append(p, (yyvsp[-3].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 11735 "parse.c"
+#line 11739 "parse.c"
     break;
 
   case 526: /* case_body: k_when case_args then compstmt_stmts cases  */
-#line 4502 "parse.y"
+#line 4506 "parse.y"
                     {
                         (yyval.node) = NEW_WHEN((yyvsp[-3].node), (yyvsp[-1].node), (yyvsp[0].node), &(yyloc), &(yylsp[-4]), &(yylsp[-2]));
                         fixpos((yyval.node), (yyvsp[-3].node));
                     }
-#line 11744 "parse.c"
+#line 11748 "parse.c"
     break;
 
   case 529: /* p_pvtbl: %empty  */
-#line 4512 "parse.y"
+#line 4516 "parse.y"
            {(yyval.tbl) = p->pvtbl; p->pvtbl = st_init_numtable();}
-#line 11750 "parse.c"
+#line 11754 "parse.c"
     break;
 
   case 530: /* p_pktbl: %empty  */
-#line 4513 "parse.y"
+#line 4517 "parse.y"
            {(yyval.tbl) = p->pktbl; p->pktbl = 0;}
-#line 11756 "parse.c"
+#line 11760 "parse.c"
     break;
 
   case 531: /* p_in_kwarg: %empty  */
-#line 4515 "parse.y"
+#line 4519 "parse.y"
                {
                         (yyval.ctxt) = p->ctxt;
                         SET_LEX_STATE(EXPR_BEG|EXPR_LABEL);
@@ -11765,11 +11769,11 @@ yyreduce:
                         p->ctxt.in_alt_pattern = 0;
                         p->ctxt.capture_in_pattern = 0;
                     }
-#line 11769 "parse.c"
+#line 11773 "parse.c"
     break;
 
   case 532: /* $@31: %empty  */
-#line 4528 "parse.y"
+#line 4532 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-2].tbl));
                         pop_pvtbl(p, (yyvsp[-3].tbl));
@@ -11777,97 +11781,97 @@ yyreduce:
                         p->ctxt.in_alt_pattern = (yyvsp[-4].ctxt).in_alt_pattern;
                         p->ctxt.capture_in_pattern = (yyvsp[-4].ctxt).capture_in_pattern;
                     }
-#line 11781 "parse.c"
+#line 11785 "parse.c"
     break;
 
   case 533: /* p_case_body: "'in'" p_in_kwarg p_pvtbl p_pktbl p_top_expr then $@31 compstmt_stmts p_cases  */
-#line 4537 "parse.y"
+#line 4541 "parse.y"
                     {
                         (yyval.node) = NEW_IN((yyvsp[-4].node), (yyvsp[-1].node), (yyvsp[0].node), &(yyloc), &(yylsp[-8]), &(yylsp[-3]), &NULL_LOC);
                     }
-#line 11789 "parse.c"
+#line 11793 "parse.c"
     break;
 
   case 537: /* p_top_expr: p_top_expr_body "'if' modifier" expr_value  */
-#line 4548 "parse.y"
+#line 4552 "parse.y"
                     {
                         (yyval.node) = new_if(p, (yyvsp[0].node), (yyvsp[-2].node), 0, &(yyloc), &(yylsp[-1]), &NULL_LOC, &NULL_LOC);
                         fixpos((yyval.node), (yyvsp[0].node));
                     }
-#line 11798 "parse.c"
+#line 11802 "parse.c"
     break;
 
   case 538: /* p_top_expr: p_top_expr_body "'unless' modifier" expr_value  */
-#line 4553 "parse.y"
+#line 4557 "parse.y"
                     {
                         (yyval.node) = new_unless(p, (yyvsp[0].node), (yyvsp[-2].node), 0, &(yyloc), &(yylsp[-1]), &NULL_LOC, &NULL_LOC);
                         fixpos((yyval.node), (yyvsp[0].node));
                     }
-#line 11807 "parse.c"
+#line 11811 "parse.c"
     break;
 
   case 540: /* p_top_expr_body: p_expr ','  */
-#line 4561 "parse.y"
+#line 4565 "parse.y"
                     {
                         (yyval.node) = new_array_pattern_tail(p, 0, 1, 0, 0, &(yyloc));
                         (yyval.node) = new_array_pattern(p, 0, (yyvsp[-1].node), (yyval.node), &(yyloc));
                     }
-#line 11816 "parse.c"
+#line 11820 "parse.c"
     break;
 
   case 541: /* p_top_expr_body: p_expr ',' p_args  */
-#line 4566 "parse.y"
+#line 4570 "parse.y"
                     {
                         (yyval.node) = new_array_pattern(p, 0, (yyvsp[-2].node), (yyvsp[0].node), &(yyloc));
                         YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @1.beg_pos); */
                     }
-#line 11825 "parse.c"
+#line 11829 "parse.c"
     break;
 
   case 542: /* p_top_expr_body: p_find  */
-#line 4571 "parse.y"
+#line 4575 "parse.y"
                     {
                         (yyval.node) = new_find_pattern(p, 0, (yyvsp[0].node), &(yyloc));
                     }
-#line 11833 "parse.c"
+#line 11837 "parse.c"
     break;
 
   case 543: /* p_top_expr_body: p_args_tail  */
-#line 4575 "parse.y"
+#line 4579 "parse.y"
                     {
                         (yyval.node) = new_array_pattern(p, 0, 0, (yyvsp[0].node), &(yyloc));
                     }
-#line 11841 "parse.c"
+#line 11845 "parse.c"
     break;
 
   case 544: /* p_top_expr_body: p_kwargs  */
-#line 4579 "parse.y"
+#line 4583 "parse.y"
                     {
                         (yyval.node) = new_hash_pattern(p, 0, (yyvsp[0].node), &(yyloc));
                     }
-#line 11849 "parse.c"
+#line 11853 "parse.c"
     break;
 
   case 546: /* p_as: p_expr "=>" p_variable  */
-#line 4588 "parse.y"
+#line 4592 "parse.y"
                     {
                         NODE *n = NEW_LIST((yyvsp[-2].node), &(yyloc));
                         n = list_append(p, n, (yyvsp[0].node));
                         (yyval.node) = new_hash(p, n, &(yyloc));
                     }
-#line 11859 "parse.c"
+#line 11863 "parse.c"
     break;
 
   case 548: /* $@32: %empty  */
-#line 4597 "parse.y"
+#line 4601 "parse.y"
                     {
                         p->ctxt.in_alt_pattern = 1;
                     }
-#line 11867 "parse.c"
+#line 11871 "parse.c"
     break;
 
   case 549: /* p_alt: p_alt '|' $@32 p_expr_basic  */
-#line 4601 "parse.y"
+#line 4605 "parse.y"
                     {
                         if (p->ctxt.capture_in_pattern) {
                             yyerror1(&(yylsp[-2]), "alternative pattern after variable capture");
@@ -11875,321 +11879,321 @@ yyreduce:
                         p->ctxt.in_alt_pattern = 0;
                         (yyval.node) = NEW_OR((yyvsp[-3].node), (yyvsp[0].node), &(yyloc), &(yylsp[-2]));
                     }
-#line 11879 "parse.c"
+#line 11883 "parse.c"
     break;
 
   case 551: /* p_lparen: '(' p_pktbl  */
-#line 4612 "parse.y"
+#line 4616 "parse.y"
                     {
                         (yyval.tbl) = (yyvsp[0].tbl);
                     }
-#line 11887 "parse.c"
+#line 11891 "parse.c"
     break;
 
   case 552: /* p_lbracket: '[' p_pktbl  */
-#line 4618 "parse.y"
+#line 4622 "parse.y"
                     {
                         (yyval.tbl) = (yyvsp[0].tbl);
                     }
-#line 11895 "parse.c"
+#line 11899 "parse.c"
     break;
 
   case 555: /* p_expr_basic: p_const p_lparen p_args rparen  */
-#line 4626 "parse.y"
+#line 4630 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-2].tbl));
                         (yyval.node) = new_array_pattern(p, (yyvsp[-3].node), 0, (yyvsp[-1].node), &(yyloc));
                         YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
                     }
-#line 11905 "parse.c"
+#line 11909 "parse.c"
     break;
 
   case 556: /* p_expr_basic: p_const p_lparen p_find rparen  */
-#line 4632 "parse.y"
+#line 4636 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-2].tbl));
                         (yyval.node) = new_find_pattern(p, (yyvsp[-3].node), (yyvsp[-1].node), &(yyloc));
                         YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
                     }
-#line 11915 "parse.c"
+#line 11919 "parse.c"
     break;
 
   case 557: /* p_expr_basic: p_const p_lparen p_kwargs rparen  */
-#line 4638 "parse.y"
+#line 4642 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-2].tbl));
                         (yyval.node) = new_hash_pattern(p, (yyvsp[-3].node), (yyvsp[-1].node), &(yyloc));
                         YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
                     }
-#line 11925 "parse.c"
+#line 11929 "parse.c"
     break;
 
   case 558: /* p_expr_basic: p_const '(' rparen  */
-#line 4644 "parse.y"
+#line 4648 "parse.y"
                     {
                         (yyval.node) = new_array_pattern_tail(p, 0, 0, 0, 0, &(yyloc));
                         (yyval.node) = new_array_pattern(p, (yyvsp[-2].node), 0, (yyval.node), &(yyloc));
                     }
-#line 11934 "parse.c"
+#line 11938 "parse.c"
     break;
 
   case 559: /* p_expr_basic: p_const p_lbracket p_args rbracket  */
-#line 4649 "parse.y"
+#line 4653 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-2].tbl));
                         (yyval.node) = new_array_pattern(p, (yyvsp[-3].node), 0, (yyvsp[-1].node), &(yyloc));
                         YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
                     }
-#line 11944 "parse.c"
+#line 11948 "parse.c"
     break;
 
   case 560: /* p_expr_basic: p_const p_lbracket p_find rbracket  */
-#line 4655 "parse.y"
+#line 4659 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-2].tbl));
                         (yyval.node) = new_find_pattern(p, (yyvsp[-3].node), (yyvsp[-1].node), &(yyloc));
                         YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
                     }
-#line 11954 "parse.c"
+#line 11958 "parse.c"
     break;
 
   case 561: /* p_expr_basic: p_const p_lbracket p_kwargs rbracket  */
-#line 4661 "parse.y"
+#line 4665 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-2].tbl));
                         (yyval.node) = new_hash_pattern(p, (yyvsp[-3].node), (yyvsp[-1].node), &(yyloc));
                         YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
                     }
-#line 11964 "parse.c"
+#line 11968 "parse.c"
     break;
 
   case 562: /* p_expr_basic: p_const '[' rbracket  */
-#line 4667 "parse.y"
+#line 4671 "parse.y"
                     {
                         (yyval.node) = new_array_pattern_tail(p, 0, 0, 0, 0, &(yyloc));
                         (yyval.node) = new_array_pattern(p, (yyvsp[-2].node), 0, (yyval.node), &(yyloc));
                     }
-#line 11973 "parse.c"
+#line 11977 "parse.c"
     break;
 
   case 563: /* p_expr_basic: "[" p_args rbracket  */
-#line 4672 "parse.y"
+#line 4676 "parse.y"
                     {
                         (yyval.node) = new_array_pattern(p, 0, 0, (yyvsp[-1].node), &(yyloc));
                     }
-#line 11981 "parse.c"
+#line 11985 "parse.c"
     break;
 
   case 564: /* p_expr_basic: "[" p_find rbracket  */
-#line 4676 "parse.y"
+#line 4680 "parse.y"
                     {
                         (yyval.node) = new_find_pattern(p, 0, (yyvsp[-1].node), &(yyloc));
                     }
-#line 11989 "parse.c"
+#line 11993 "parse.c"
     break;
 
   case 565: /* p_expr_basic: "[" rbracket  */
-#line 4680 "parse.y"
+#line 4684 "parse.y"
                     {
                         (yyval.node) = new_array_pattern_tail(p, 0, 0, 0, 0, &(yyloc));
                         (yyval.node) = new_array_pattern(p, 0, 0, (yyval.node), &(yyloc));
                     }
-#line 11998 "parse.c"
+#line 12002 "parse.c"
     break;
 
   case 566: /* $@33: %empty  */
-#line 4685 "parse.y"
+#line 4689 "parse.y"
                     {
                         p->ctxt.in_kwarg = 0;
                     }
-#line 12006 "parse.c"
+#line 12010 "parse.c"
     break;
 
   case 567: /* p_expr_basic: "{" p_pktbl lex_ctxt $@33 p_kwargs rbrace  */
-#line 4689 "parse.y"
+#line 4693 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-4].tbl));
                         p->ctxt.in_kwarg = (yyvsp[-3].ctxt).in_kwarg;
                         (yyval.node) = new_hash_pattern(p, 0, (yyvsp[-1].node), &(yyloc));
                     }
-#line 12016 "parse.c"
+#line 12020 "parse.c"
     break;
 
   case 568: /* p_expr_basic: "{" rbrace  */
-#line 4695 "parse.y"
+#line 4699 "parse.y"
                     {
                         (yyval.node) = new_hash_pattern_tail(p, 0, 0, &(yyloc));
                         (yyval.node) = new_hash_pattern(p, 0, (yyval.node), &(yyloc));
                     }
-#line 12025 "parse.c"
+#line 12029 "parse.c"
     break;
 
   case 569: /* p_expr_basic: "(" p_pktbl p_expr rparen  */
-#line 4700 "parse.y"
+#line 4704 "parse.y"
                     {
                         pop_pktbl(p, (yyvsp[-2].tbl));
                         (yyval.node) = (yyvsp[-1].node);
                     }
-#line 12034 "parse.c"
+#line 12038 "parse.c"
     break;
 
   case 570: /* p_args: p_expr  */
-#line 4707 "parse.y"
+#line 4711 "parse.y"
                     {
                         NODE *pre_args = NEW_LIST((yyvsp[0].node), &(yyloc));
                         (yyval.node) = new_array_pattern_tail(p, pre_args, 0, 0, 0, &(yyloc));
                     }
-#line 12043 "parse.c"
+#line 12047 "parse.c"
     break;
 
   case 571: /* p_args: p_args_head  */
-#line 4712 "parse.y"
+#line 4716 "parse.y"
                     {
                         (yyval.node) = new_array_pattern_tail(p, (yyvsp[0].node), 1, 0, 0, &(yyloc));
                     }
-#line 12051 "parse.c"
+#line 12055 "parse.c"
     break;
 
   case 572: /* p_args: p_args_head p_arg  */
-#line 4716 "parse.y"
+#line 4720 "parse.y"
                     {
                         (yyval.node) = new_array_pattern_tail(p, list_concat((yyvsp[-1].node), (yyvsp[0].node)), 0, 0, 0, &(yyloc));
                     }
-#line 12059 "parse.c"
+#line 12063 "parse.c"
     break;
 
   case 573: /* p_args: p_args_head p_rest  */
-#line 4720 "parse.y"
+#line 4724 "parse.y"
                     {
                         (yyval.node) = new_array_pattern_tail(p, (yyvsp[-1].node), 1, (yyvsp[0].node), 0, &(yyloc));
                     }
-#line 12067 "parse.c"
+#line 12071 "parse.c"
     break;
 
   case 574: /* p_args: p_args_head p_rest ',' p_args_post  */
-#line 4724 "parse.y"
+#line 4728 "parse.y"
                     {
                         (yyval.node) = new_array_pattern_tail(p, (yyvsp[-3].node), 1, (yyvsp[-2].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 12075 "parse.c"
+#line 12079 "parse.c"
     break;
 
   case 577: /* p_args_head: p_args_head p_arg ','  */
-#line 4732 "parse.y"
+#line 4736 "parse.y"
                     {
                         (yyval.node) = list_concat((yyvsp[-2].node), (yyvsp[-1].node));
                     }
-#line 12083 "parse.c"
+#line 12087 "parse.c"
     break;
 
   case 578: /* p_args_tail: p_rest  */
-#line 4738 "parse.y"
+#line 4742 "parse.y"
                     {
                         (yyval.node) = new_array_pattern_tail(p, 0, 1, (yyvsp[0].node), 0, &(yyloc));
                     }
-#line 12091 "parse.c"
+#line 12095 "parse.c"
     break;
 
   case 579: /* p_args_tail: p_rest ',' p_args_post  */
-#line 4742 "parse.y"
+#line 4746 "parse.y"
                     {
                         (yyval.node) = new_array_pattern_tail(p, 0, 1, (yyvsp[-2].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 12099 "parse.c"
+#line 12103 "parse.c"
     break;
 
   case 580: /* p_find: p_rest ',' p_args_post ',' p_rest  */
-#line 4748 "parse.y"
+#line 4752 "parse.y"
                     {
                         (yyval.node) = new_find_pattern_tail(p, (yyvsp[-4].node), (yyvsp[-2].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 12107 "parse.c"
+#line 12111 "parse.c"
     break;
 
   case 581: /* p_rest: "*" "local variable or method"  */
-#line 4755 "parse.y"
+#line 4759 "parse.y"
                     {
                         error_duplicate_pattern_variable(p, (yyvsp[0].id), &(yylsp[0]));
                         (yyval.node) = assignable(p, (yyvsp[0].id), 0, &(yyloc));
                     }
-#line 12116 "parse.c"
+#line 12120 "parse.c"
     break;
 
   case 582: /* p_rest: "*"  */
-#line 4760 "parse.y"
+#line 4764 "parse.y"
                     {
                         (yyval.node) = 0;
                     }
-#line 12124 "parse.c"
+#line 12128 "parse.c"
     break;
 
   case 584: /* p_args_post: p_args_post ',' p_arg  */
-#line 4767 "parse.y"
+#line 4771 "parse.y"
                     {
                         (yyval.node) = list_concat((yyvsp[-2].node), (yyvsp[0].node));
                     }
-#line 12132 "parse.c"
+#line 12136 "parse.c"
     break;
 
   case 585: /* p_arg: p_expr  */
-#line 4773 "parse.y"
+#line 4777 "parse.y"
                     {
                         (yyval.node) = NEW_LIST((yyvsp[0].node), &(yyloc));
                     }
-#line 12140 "parse.c"
+#line 12144 "parse.c"
     break;
 
   case 586: /* p_kwargs: p_kwarg ',' p_any_kwrest  */
-#line 4779 "parse.y"
+#line 4783 "parse.y"
                     {
                         (yyval.node) =  new_hash_pattern_tail(p, new_unique_key_hash(p, (yyvsp[-2].node), &(yyloc)), (yyvsp[0].id), &(yyloc));
                     }
-#line 12148 "parse.c"
+#line 12152 "parse.c"
     break;
 
   case 587: /* p_kwargs: p_kwarg  */
-#line 4783 "parse.y"
+#line 4787 "parse.y"
                     {
                         (yyval.node) =  new_hash_pattern_tail(p, new_unique_key_hash(p, (yyvsp[0].node), &(yyloc)), 0, &(yyloc));
                     }
-#line 12156 "parse.c"
+#line 12160 "parse.c"
     break;
 
   case 588: /* p_kwargs: p_kwarg ','  */
-#line 4787 "parse.y"
+#line 4791 "parse.y"
                     {
                         (yyval.node) =  new_hash_pattern_tail(p, new_unique_key_hash(p, (yyvsp[-1].node), &(yyloc)), 0, &(yyloc));
                     }
-#line 12164 "parse.c"
+#line 12168 "parse.c"
     break;
 
   case 589: /* p_kwargs: p_any_kwrest  */
-#line 4791 "parse.y"
+#line 4795 "parse.y"
                     {
                         (yyval.node) =  new_hash_pattern_tail(p, new_hash(p, 0, &(yyloc)), (yyvsp[0].id), &(yyloc));
                     }
-#line 12172 "parse.c"
+#line 12176 "parse.c"
     break;
 
   case 591: /* p_kwarg: p_kwarg ',' p_kw  */
-#line 4798 "parse.y"
+#line 4802 "parse.y"
                     {
                         (yyval.node) = list_concat((yyvsp[-2].node), (yyvsp[0].node));
                     }
-#line 12180 "parse.c"
+#line 12184 "parse.c"
     break;
 
   case 592: /* p_kw: p_kw_label p_expr  */
-#line 4804 "parse.y"
+#line 4808 "parse.y"
                     {
                         error_duplicate_pattern_key(p, (yyvsp[-1].id), &(yylsp[-1]));
                         (yyval.node) = list_append(p, NEW_LIST(NEW_SYM(rb_id2str((yyvsp[-1].id)), &(yylsp[-1])), &(yyloc)), (yyvsp[0].node));
                     }
-#line 12189 "parse.c"
+#line 12193 "parse.c"
     break;
 
   case 593: /* p_kw: p_kw_label  */
-#line 4809 "parse.y"
+#line 4813 "parse.y"
                     {
                         error_duplicate_pattern_key(p, (yyvsp[0].id), &(yylsp[0]));
                         if ((yyvsp[0].id) && !is_local_id((yyvsp[0].id))) {
@@ -12198,11 +12202,11 @@ yyreduce:
                         error_duplicate_pattern_variable(p, (yyvsp[0].id), &(yylsp[0]));
                         (yyval.node) = list_append(p, NEW_LIST(NEW_SYM(rb_id2str((yyvsp[0].id)), &(yyloc)), &(yyloc)), assignable(p, (yyvsp[0].id), 0, &(yyloc)));
                     }
-#line 12202 "parse.c"
+#line 12206 "parse.c"
     break;
 
   case 595: /* p_kw_label: "string literal" string_contents tLABEL_END  */
-#line 4821 "parse.y"
+#line 4825 "parse.y"
                     {
                         YYLTYPE loc = code_loc_gen(&(yylsp[-2]), &(yylsp[0]));
                         if (!(yyvsp[-1].node) || nd_type_p((yyvsp[-1].node), NODE_STR)) {
@@ -12214,116 +12218,116 @@ yyreduce:
                             (yyval.id) = rb_intern_str(STR_NEW0());
                         }
                     }
-#line 12218 "parse.c"
+#line 12222 "parse.c"
     break;
 
   case 596: /* p_kwrest: kwrest_mark "local variable or method"  */
-#line 4835 "parse.y"
+#line 4839 "parse.y"
                     {
                         (yyval.id) = (yyvsp[0].id);
                     }
-#line 12226 "parse.c"
+#line 12230 "parse.c"
     break;
 
   case 597: /* p_kwrest: kwrest_mark  */
-#line 4839 "parse.y"
+#line 4843 "parse.y"
                     {
                         (yyval.id) = 0;
                     }
-#line 12234 "parse.c"
+#line 12238 "parse.c"
     break;
 
   case 598: /* p_kwnorest: kwrest_mark "'nil'"  */
-#line 4845 "parse.y"
+#line 4849 "parse.y"
                     {
                         (yyval.id) = 0;
                     }
-#line 12242 "parse.c"
+#line 12246 "parse.c"
     break;
 
   case 600: /* p_any_kwrest: p_kwnorest  */
-#line 4852 "parse.y"
+#line 4856 "parse.y"
                     {
                         (yyval.id) = idNil;
                     }
-#line 12250 "parse.c"
+#line 12254 "parse.c"
     break;
 
   case 602: /* range_expr_p_primitive: p_primitive ".." p_primitive  */
-#line 2534 "parse.y"
+#line 2553 "parse.y"
                     {
                         value_expr(p, (yyvsp[-2].node));
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = NEW_DOT2((yyvsp[-2].node), (yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 12260 "parse.c"
+#line 12264 "parse.c"
     break;
 
   case 603: /* range_expr_p_primitive: p_primitive "..." p_primitive  */
-#line 2540 "parse.y"
+#line 2559 "parse.y"
                     {
                         value_expr(p, (yyvsp[-2].node));
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = NEW_DOT3((yyvsp[-2].node), (yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 12270 "parse.c"
+#line 12274 "parse.c"
     break;
 
   case 604: /* range_expr_p_primitive: p_primitive ".."  */
-#line 2546 "parse.y"
+#line 2565 "parse.y"
                     {
                         value_expr(p, (yyvsp[-1].node));
                         (yyval.node) = NEW_DOT2((yyvsp[-1].node), new_nil_at(p, NULL), &(yyloc), &(yylsp[0]));
                     }
-#line 12279 "parse.c"
+#line 12283 "parse.c"
     break;
 
   case 605: /* range_expr_p_primitive: p_primitive "..."  */
-#line 2551 "parse.y"
+#line 2570 "parse.y"
                     {
                         value_expr(p, (yyvsp[-1].node));
                         (yyval.node) = NEW_DOT3((yyvsp[-1].node), new_nil_at(p, NULL), &(yyloc), &(yylsp[0]));
                     }
-#line 12288 "parse.c"
+#line 12292 "parse.c"
     break;
 
   case 606: /* range_expr_p_primitive: "(.." p_primitive  */
-#line 2556 "parse.y"
+#line 2575 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = NEW_DOT2(new_nil_at(p, NULL), (yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 12297 "parse.c"
+#line 12301 "parse.c"
     break;
 
   case 607: /* range_expr_p_primitive: "(..." p_primitive  */
-#line 2561 "parse.y"
+#line 2580 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = NEW_DOT3(new_nil_at(p, NULL), (yyvsp[0].node), &(yyloc), &(yylsp[-1]));
                     }
-#line 12306 "parse.c"
+#line 12310 "parse.c"
     break;
 
   case 620: /* p_primitive: keyword_variable  */
-#line 4866 "parse.y"
+#line 4870 "parse.y"
                     {
                         if (!((yyval.node) = gettable(p, (yyvsp[0].id), &(yyloc)))) (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 12314 "parse.c"
+#line 12318 "parse.c"
     break;
 
   case 622: /* p_variable: "local variable or method"  */
-#line 4873 "parse.y"
+#line 4877 "parse.y"
                     {
                         error_duplicate_pattern_variable(p, (yyvsp[0].id), &(yylsp[0]));
                         (yyval.node) = assignable(p, (yyvsp[0].id), 0, &(yyloc));
                     }
-#line 12323 "parse.c"
+#line 12327 "parse.c"
     break;
 
   case 623: /* p_var_ref: '^' "local variable or method"  */
-#line 4880 "parse.y"
+#line 4884 "parse.y"
                     {
                         NODE *n = gettable(p, (yyvsp[0].id), &(yyloc));
                         if (!n) {
@@ -12334,51 +12338,51 @@ yyreduce:
                         }
                         (yyval.node) = n;
                     }
-#line 12338 "parse.c"
+#line 12342 "parse.c"
     break;
 
   case 624: /* p_var_ref: '^' nonlocal_var  */
-#line 4891 "parse.y"
+#line 4895 "parse.y"
                     {
                         if (!((yyval.node) = gettable(p, (yyvsp[0].id), &(yyloc)))) (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 12346 "parse.c"
+#line 12350 "parse.c"
     break;
 
   case 625: /* p_expr_ref: '^' "(" expr_value rparen  */
-#line 4897 "parse.y"
+#line 4901 "parse.y"
                     {
                         (yyval.node) = NEW_BLOCK((yyvsp[-1].node), &(yyloc));
                     }
-#line 12354 "parse.c"
+#line 12358 "parse.c"
     break;
 
   case 626: /* p_const: ":: at EXPR_BEG" cname  */
-#line 4903 "parse.y"
+#line 4907 "parse.y"
                     {
                         (yyval.node) = NEW_COLON3((yyvsp[0].id), &(yyloc), &(yylsp[-1]), &(yylsp[0]));
                     }
-#line 12362 "parse.c"
+#line 12366 "parse.c"
     break;
 
   case 627: /* p_const: p_const "::" cname  */
-#line 4907 "parse.y"
+#line 4911 "parse.y"
                     {
                         (yyval.node) = NEW_COLON2((yyvsp[-2].node), (yyvsp[0].id), &(yyloc), &(yylsp[-1]), &(yylsp[0]));
                     }
-#line 12370 "parse.c"
+#line 12374 "parse.c"
     break;
 
   case 628: /* p_const: "constant"  */
-#line 4911 "parse.y"
+#line 4915 "parse.y"
                    {
                         (yyval.node) = gettable(p, (yyvsp[0].id), &(yyloc));
                    }
-#line 12378 "parse.c"
+#line 12382 "parse.c"
     break;
 
   case 629: /* opt_rescue: k_rescue exc_list exc_var then compstmt_stmts opt_rescue  */
-#line 4919 "parse.y"
+#line 4923 "parse.y"
                     {
                         NODE *err = (yyvsp[-3].node);
                         if ((yyvsp[-3].node)) {
@@ -12396,45 +12400,45 @@ yyreduce:
                             fixpos((yyval.node), (yyvsp[-1].node));
                         }
                     }
-#line 12400 "parse.c"
+#line 12404 "parse.c"
     break;
 
   case 631: /* exc_list: arg_value  */
-#line 4940 "parse.y"
+#line 4944 "parse.y"
                     {
                         (yyval.node) = NEW_LIST((yyvsp[0].node), &(yyloc));
                     }
-#line 12408 "parse.c"
+#line 12412 "parse.c"
     break;
 
   case 632: /* exc_list: mrhs  */
-#line 4944 "parse.y"
+#line 4948 "parse.y"
                     {
                         if (!((yyval.node) = splat_array((yyvsp[0].node)))) (yyval.node) = (yyvsp[0].node);
                     }
-#line 12416 "parse.c"
+#line 12420 "parse.c"
     break;
 
   case 634: /* exc_var: "=>" lhs  */
-#line 4951 "parse.y"
+#line 4955 "parse.y"
                     {
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 12424 "parse.c"
+#line 12428 "parse.c"
     break;
 
   case 636: /* opt_ensure: k_ensure stmts option_terms  */
-#line 4958 "parse.y"
+#line 4962 "parse.y"
                     {
                         p->ctxt.in_rescue = (yyvsp[-2].ctxt).in_rescue;
                         (yyval.node) = (yyvsp[-1].node);
                         void_expr(p, void_stmts(p, (yyval.node)));
                     }
-#line 12434 "parse.c"
+#line 12438 "parse.c"
     break;
 
   case 640: /* strings: string  */
-#line 4971 "parse.y"
+#line 4975 "parse.y"
                     {
                         if (!(yyvsp[0].node)) {
                             (yyval.node) = NEW_STR(STRING_NEW0(), &(yyloc));
@@ -12443,19 +12447,19 @@ yyreduce:
                             (yyval.node) = evstr2dstr(p, (yyvsp[0].node));
                         }
                     }
-#line 12447 "parse.c"
+#line 12451 "parse.c"
     break;
 
   case 643: /* string: string string1  */
-#line 4984 "parse.y"
+#line 4988 "parse.y"
                     {
                         (yyval.node) = literal_concat(p, (yyvsp[-1].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 12455 "parse.c"
+#line 12459 "parse.c"
     break;
 
   case 644: /* string1: "string literal" string_contents "terminator"  */
-#line 4990 "parse.y"
+#line 4994 "parse.y"
                     {
                         (yyval.node) = heredoc_dedent(p, (yyvsp[-1].node));
                         (yyval.node) = string_literal_quotes(p, (yyval.node), &(yylsp[-2]), &(yylsp[0]), &(yyloc));
@@ -12463,174 +12467,174 @@ yyreduce:
                             p->heredoc_indent = 0;
                         }
                     }
-#line 12467 "parse.c"
+#line 12471 "parse.c"
     break;
 
   case 645: /* xstring: "backtick literal" xstring_contents "terminator"  */
-#line 5000 "parse.y"
+#line 5004 "parse.y"
                     {
                         (yyval.node) = new_xstring(p, heredoc_dedent(p, (yyvsp[-1].node)), &(yyloc));
                         if (p->heredoc_indent > 0) {
                             p->heredoc_indent = 0;
                         }
                     }
-#line 12478 "parse.c"
+#line 12482 "parse.c"
     break;
 
   case 646: /* regexp: "regexp literal" regexp_contents tREGEXP_END  */
-#line 5009 "parse.y"
+#line 5013 "parse.y"
                     {
                         (yyval.node) = new_regexp(p, (yyvsp[-1].node), (yyvsp[0].num), &(yyloc), &(yylsp[-2]), &(yylsp[-1]), &(yylsp[0]));
                     }
-#line 12486 "parse.c"
+#line 12490 "parse.c"
     break;
 
   case 649: /* words_tWORDS_BEG_word_list: "word list" nonempty_list_' ' word_list "terminator"  */
-#line 2577 "parse.y"
+#line 2596 "parse.y"
                     {
                         (yyval.node) = make_list((yyvsp[-1].node), &(yyloc));
                     }
-#line 12494 "parse.c"
+#line 12498 "parse.c"
     break;
 
   case 651: /* word_list: %empty  */
-#line 5018 "parse.y"
+#line 5022 "parse.y"
                     {
                         (yyval.node) = 0;
                     }
-#line 12502 "parse.c"
+#line 12506 "parse.c"
     break;
 
   case 652: /* word_list: word_list word nonempty_list_' '  */
-#line 5022 "parse.y"
+#line 5026 "parse.y"
                     {
                         (yyval.node) = list_append(p, (yyvsp[-2].node), evstr2dstr(p, (yyvsp[-1].node)));
                     }
-#line 12510 "parse.c"
+#line 12514 "parse.c"
     break;
 
   case 654: /* word: word string_content  */
-#line 5029 "parse.y"
+#line 5033 "parse.y"
                     {
                         (yyval.node) = literal_concat(p, (yyvsp[-1].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 12518 "parse.c"
+#line 12522 "parse.c"
     break;
 
   case 655: /* words_tSYMBOLS_BEG_symbol_list: "symbol list" nonempty_list_' ' symbol_list "terminator"  */
-#line 2577 "parse.y"
+#line 2596 "parse.y"
                     {
                         (yyval.node) = make_list((yyvsp[-1].node), &(yyloc));
                     }
-#line 12526 "parse.c"
+#line 12530 "parse.c"
     break;
 
   case 657: /* symbol_list: %empty  */
-#line 5038 "parse.y"
+#line 5042 "parse.y"
                     {
                         (yyval.node) = 0;
                     }
-#line 12534 "parse.c"
+#line 12538 "parse.c"
     break;
 
   case 658: /* symbol_list: symbol_list word nonempty_list_' '  */
-#line 5042 "parse.y"
+#line 5046 "parse.y"
                     {
                         (yyval.node) = symbol_append(p, (yyvsp[-2].node), evstr2dstr(p, (yyvsp[-1].node)));
                     }
-#line 12542 "parse.c"
+#line 12546 "parse.c"
     break;
 
   case 659: /* words_tQWORDS_BEG_qword_list: "verbatim word list" nonempty_list_' ' qword_list "terminator"  */
-#line 2577 "parse.y"
+#line 2596 "parse.y"
                     {
                         (yyval.node) = make_list((yyvsp[-1].node), &(yyloc));
                     }
-#line 12550 "parse.c"
+#line 12554 "parse.c"
     break;
 
   case 661: /* words_tQSYMBOLS_BEG_qsym_list: "verbatim symbol list" nonempty_list_' ' qsym_list "terminator"  */
-#line 2577 "parse.y"
+#line 2596 "parse.y"
                     {
                         (yyval.node) = make_list((yyvsp[-1].node), &(yyloc));
                     }
-#line 12558 "parse.c"
+#line 12562 "parse.c"
     break;
 
   case 663: /* qword_list: %empty  */
-#line 5054 "parse.y"
+#line 5058 "parse.y"
                     {
                         (yyval.node) = 0;
                     }
-#line 12566 "parse.c"
+#line 12570 "parse.c"
     break;
 
   case 664: /* qword_list: qword_list "literal content" nonempty_list_' '  */
-#line 5058 "parse.y"
+#line 5062 "parse.y"
                     {
                         (yyval.node) = list_append(p, (yyvsp[-2].node), (yyvsp[-1].node));
                     }
-#line 12574 "parse.c"
+#line 12578 "parse.c"
     break;
 
   case 665: /* qsym_list: %empty  */
-#line 5064 "parse.y"
+#line 5068 "parse.y"
                     {
                         (yyval.node) = 0;
                     }
-#line 12582 "parse.c"
+#line 12586 "parse.c"
     break;
 
   case 666: /* qsym_list: qsym_list "literal content" nonempty_list_' '  */
-#line 5068 "parse.y"
+#line 5072 "parse.y"
                     {
                         (yyval.node) = symbol_append(p, (yyvsp[-2].node), (yyvsp[-1].node));
                     }
-#line 12590 "parse.c"
+#line 12594 "parse.c"
     break;
 
   case 667: /* string_contents: %empty  */
-#line 5074 "parse.y"
+#line 5078 "parse.y"
                     {
                         (yyval.node) = 0;
                     }
-#line 12598 "parse.c"
+#line 12602 "parse.c"
     break;
 
   case 668: /* string_contents: string_contents string_content  */
-#line 5078 "parse.y"
+#line 5082 "parse.y"
                     {
                         (yyval.node) = literal_concat(p, (yyvsp[-1].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 12606 "parse.c"
+#line 12610 "parse.c"
     break;
 
   case 669: /* xstring_contents: %empty  */
-#line 5084 "parse.y"
+#line 5088 "parse.y"
                     {
                         (yyval.node) = 0;
                     }
-#line 12614 "parse.c"
+#line 12618 "parse.c"
     break;
 
   case 670: /* xstring_contents: xstring_contents string_content  */
-#line 5088 "parse.y"
+#line 5092 "parse.y"
                     {
                         (yyval.node) = literal_concat(p, (yyvsp[-1].node), (yyvsp[0].node), &(yyloc));
                     }
-#line 12622 "parse.c"
+#line 12626 "parse.c"
     break;
 
   case 671: /* regexp_contents: %empty  */
-#line 5094 "parse.y"
+#line 5098 "parse.y"
                     {
                         (yyval.node) = 0;
                     }
-#line 12630 "parse.c"
+#line 12634 "parse.c"
     break;
 
   case 672: /* regexp_contents: regexp_contents string_content  */
-#line 5098 "parse.y"
+#line 5102 "parse.y"
                     {
                         NODE *head = (yyvsp[-1].node), *tail = (yyvsp[0].node);
                         if (!head) {
@@ -12653,32 +12657,32 @@ yyreduce:
                             (yyval.node) = list_append(p, head, tail);
                         }
                     }
-#line 12657 "parse.c"
+#line 12661 "parse.c"
     break;
 
   case 674: /* @34: %empty  */
-#line 5124 "parse.y"
+#line 5128 "parse.y"
                     {
                         /* need to backup p->lex.strterm so that a string literal `%&foo,#$&,bar&` can be parsed */
                         (yyval.strterm) = p->lex.strterm;
                         p->lex.strterm = 0;
                         SET_LEX_STATE(EXPR_BEG);
                     }
-#line 12668 "parse.c"
+#line 12672 "parse.c"
     break;
 
   case 675: /* string_content: tSTRING_DVAR @34 string_dvar  */
-#line 5131 "parse.y"
+#line 5135 "parse.y"
                     {
                         p->lex.strterm = (yyvsp[-1].strterm);
                         (yyval.node) = NEW_EVSTR((yyvsp[0].node), &(yyloc), &(yylsp[-2]), &NULL_LOC);
                         nd_set_line((yyval.node), (yylsp[0]).end_pos.lineno);
                     }
-#line 12678 "parse.c"
+#line 12682 "parse.c"
     break;
 
   case 676: /* @35: %empty  */
-#line 5137 "parse.y"
+#line 5141 "parse.y"
                     {
                         CMDARG_PUSH(0);
                         COND_PUSH(0);
@@ -12687,38 +12691,38 @@ yyreduce:
                         p->lex.strterm = 0;
                         SET_LEX_STATE(EXPR_BEG);
                     }
-#line 12691 "parse.c"
+#line 12695 "parse.c"
     break;
 
   case 677: /* @36: %empty  */
-#line 5145 "parse.y"
+#line 5149 "parse.y"
                     {
                         (yyval.num) = p->lex.brace_nest;
                         p->lex.brace_nest = 0;
                     }
-#line 12700 "parse.c"
+#line 12704 "parse.c"
     break;
 
   case 678: /* @37: %empty  */
-#line 5149 "parse.y"
+#line 5153 "parse.y"
                     {
                         (yyval.num) = p->lex.lpar_beg;
                         p->lex.lpar_beg = -1;
                     }
-#line 12709 "parse.c"
+#line 12713 "parse.c"
     break;
 
   case 679: /* @38: %empty  */
-#line 5153 "parse.y"
+#line 5157 "parse.y"
                     {
                         (yyval.num) = p->heredoc_indent;
                         p->heredoc_indent = 0;
                     }
-#line 12718 "parse.c"
+#line 12722 "parse.c"
     break;
 
   case 680: /* string_content: "'#{'" @35 @36 @37 @38 compstmt_stmts string_dend  */
-#line 5158 "parse.y"
+#line 5162 "parse.y"
                     {
                         COND_POP();
                         CMDARG_POP();
@@ -12731,19 +12735,19 @@ yyreduce:
                         if ((yyvsp[-1].node)) nd_unset_fl_newline((yyvsp[-1].node));
                         (yyval.node) = new_evstr(p, (yyvsp[-1].node), &(yyloc), &(yylsp[-6]), &(yylsp[0]));
                     }
-#line 12735 "parse.c"
+#line 12739 "parse.c"
     break;
 
   case 683: /* string_dvar: nonlocal_var  */
-#line 5177 "parse.y"
+#line 5181 "parse.y"
                     {
                         if (!((yyval.node) = gettable(p, (yyvsp[0].id), &(yyloc)))) (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 12743 "parse.c"
+#line 12747 "parse.c"
     break;
 
   case 687: /* ssym: "symbol literal" sym  */
-#line 5188 "parse.y"
+#line 5192 "parse.y"
                     {
                         SET_LEX_STATE(EXPR_END);
                         rb_parser_string_t *str = rb_id2str((yyvsp[0].id));
@@ -12756,71 +12760,71 @@ yyreduce:
                         if (!str) str = STR_NEW0();
                         (yyval.node) = NEW_SYM(str, &(yyloc));
                     }
-#line 12760 "parse.c"
+#line 12764 "parse.c"
     break;
 
   case 690: /* dsym: "symbol literal" string_contents "terminator"  */
-#line 5207 "parse.y"
+#line 5211 "parse.y"
                     {
                         SET_LEX_STATE(EXPR_END);
                         (yyval.node) = dsym_node(p, (yyvsp[-1].node), &(yyloc));
                     }
-#line 12769 "parse.c"
+#line 12773 "parse.c"
     break;
 
   case 692: /* numeric: tUMINUS_NUM simple_numeric  */
-#line 5215 "parse.y"
+#line 5219 "parse.y"
                     {
                         (yyval.node) = (yyvsp[0].node);
                         negate_lit(p, (yyval.node), &(yyloc));
                     }
-#line 12778 "parse.c"
+#line 12782 "parse.c"
     break;
 
   case 703: /* keyword_variable: "'nil'"  */
-#line 5236 "parse.y"
+#line 5240 "parse.y"
                               {(yyval.id) = KWD2EID(nil, (yyvsp[0].id));}
-#line 12784 "parse.c"
+#line 12788 "parse.c"
     break;
 
   case 704: /* keyword_variable: "'self'"  */
-#line 5237 "parse.y"
+#line 5241 "parse.y"
                                {(yyval.id) = KWD2EID(self, (yyvsp[0].id));}
-#line 12790 "parse.c"
+#line 12794 "parse.c"
     break;
 
   case 705: /* keyword_variable: "'true'"  */
-#line 5238 "parse.y"
+#line 5242 "parse.y"
                                {(yyval.id) = KWD2EID(true, (yyvsp[0].id));}
-#line 12796 "parse.c"
+#line 12800 "parse.c"
     break;
 
   case 706: /* keyword_variable: "'false'"  */
-#line 5239 "parse.y"
+#line 5243 "parse.y"
                                 {(yyval.id) = KWD2EID(false, (yyvsp[0].id));}
-#line 12802 "parse.c"
+#line 12806 "parse.c"
     break;
 
   case 707: /* keyword_variable: "'__FILE__'"  */
-#line 5240 "parse.y"
+#line 5244 "parse.y"
                                   {(yyval.id) = KWD2EID(_FILE__, (yyvsp[0].id));}
-#line 12808 "parse.c"
+#line 12812 "parse.c"
     break;
 
   case 708: /* keyword_variable: "'__LINE__'"  */
-#line 5241 "parse.y"
+#line 5245 "parse.y"
                                   {(yyval.id) = KWD2EID(_LINE__, (yyvsp[0].id));}
-#line 12814 "parse.c"
+#line 12818 "parse.c"
     break;
 
   case 709: /* keyword_variable: "'__ENCODING__'"  */
-#line 5242 "parse.y"
+#line 5246 "parse.y"
                                       {(yyval.id) = KWD2EID(_ENCODING__, (yyvsp[0].id));}
-#line 12820 "parse.c"
+#line 12824 "parse.c"
     break;
 
   case 710: /* var_ref: user_variable  */
-#line 5246 "parse.y"
+#line 5250 "parse.y"
                     {
                         if (!((yyval.node) = gettable(p, (yyvsp[0].id), &(yyloc)))) (yyval.node) = NEW_ERROR(&(yyloc));
                         if (ifdef_ripper(id_is_var(p, (yyvsp[0].id)), false)) {
@@ -12828,91 +12832,91 @@ yyreduce:
                         else {
                         }
                     }
-#line 12832 "parse.c"
+#line 12836 "parse.c"
     break;
 
   case 711: /* var_ref: keyword_variable  */
-#line 5254 "parse.y"
+#line 5258 "parse.y"
                     {
                         if (!((yyval.node) = gettable(p, (yyvsp[0].id), &(yyloc)))) (yyval.node) = NEW_ERROR(&(yyloc));
                     }
-#line 12840 "parse.c"
+#line 12844 "parse.c"
     break;
 
   case 712: /* var_lhs: user_variable  */
-#line 5260 "parse.y"
+#line 5264 "parse.y"
                     {
                         (yyval.node) = assignable(p, (yyvsp[0].id), 0, &(yyloc));
                     }
-#line 12848 "parse.c"
+#line 12852 "parse.c"
     break;
 
   case 713: /* var_lhs: keyword_variable  */
-#line 5260 "parse.y"
+#line 5264 "parse.y"
                     {
                         (yyval.node) = assignable(p, (yyvsp[0].id), 0, &(yyloc));
                     }
-#line 12856 "parse.c"
+#line 12860 "parse.c"
     break;
 
   case 716: /* $@39: %empty  */
-#line 5270 "parse.y"
+#line 5274 "parse.y"
                     {
                         SET_LEX_STATE(EXPR_BEG);
                         p->command_start = TRUE;
                     }
-#line 12865 "parse.c"
+#line 12869 "parse.c"
     break;
 
   case 717: /* superclass: '<' $@39 expr_value term  */
-#line 5275 "parse.y"
+#line 5279 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node);
                     }
-#line 12873 "parse.c"
+#line 12877 "parse.c"
     break;
 
   case 720: /* f_opt_paren_args: f_empty_arg  */
-#line 5283 "parse.y"
+#line 5287 "parse.y"
                     {
                         p->ctxt.in_argdef = 0;
                     }
-#line 12881 "parse.c"
+#line 12885 "parse.c"
     break;
 
   case 721: /* f_empty_arg: %empty  */
-#line 5289 "parse.y"
+#line 5293 "parse.y"
                     {
                         (yyval.node_args) = new_empty_args_tail(p, &(yyloc));
                         (yyval.node_args) = new_args(p, 0, 0, 0, 0, (yyval.node_args), &(yyloc));
                     }
-#line 12890 "parse.c"
+#line 12894 "parse.c"
     break;
 
   case 722: /* f_paren_args: '(' f_args rparen  */
-#line 5296 "parse.y"
+#line 5300 "parse.y"
                     {
                         (yyval.node_args) = (yyvsp[-1].node_args);
                         SET_LEX_STATE(EXPR_BEG);
                         p->command_start = TRUE;
                         p->ctxt.in_argdef = 0;
                     }
-#line 12901 "parse.c"
+#line 12905 "parse.c"
     break;
 
   case 724: /* @40: %empty  */
-#line 5305 "parse.y"
+#line 5309 "parse.y"
                     {
                         (yyval.ctxt) = p->ctxt;
                         p->ctxt.in_kwarg = 1;
                         p->ctxt.in_argdef = 1;
                         SET_LEX_STATE(p->lex.state|EXPR_LABEL); /* force for args */
                     }
-#line 12912 "parse.c"
+#line 12916 "parse.c"
     break;
 
   case 725: /* f_arglist: @40 f_args term  */
-#line 5312 "parse.y"
+#line 5316 "parse.y"
                     {
                         p->ctxt.in_kwarg = (yyvsp[-2].ctxt).in_kwarg;
                         p->ctxt.in_argdef = 0;
@@ -12920,494 +12924,494 @@ yyreduce:
                         SET_LEX_STATE(EXPR_BEG);
                         p->command_start = TRUE;
                     }
-#line 12924 "parse.c"
+#line 12928 "parse.c"
     break;
 
   case 726: /* f_kw_arg_value: f_label arg_value  */
-#line 2450 "parse.y"
+#line 2469 "parse.y"
                     {
                         p->ctxt.in_argdef = 1;
                         (yyval.node_kw_arg) = new_kw_arg(p, assignable(p, (yyvsp[-1].id), (yyvsp[0].node), &(yyloc)), &(yyloc));
                     }
-#line 12933 "parse.c"
+#line 12937 "parse.c"
     break;
 
   case 727: /* f_kw_arg_value: f_label  */
-#line 2455 "parse.y"
+#line 2474 "parse.y"
                     {
                         p->ctxt.in_argdef = 1;
                         (yyval.node_kw_arg) = new_kw_arg(p, assignable(p, (yyvsp[0].id), NODE_SPECIAL_REQUIRED_KEYWORD, &(yyloc)), &(yyloc));
                     }
-#line 12942 "parse.c"
+#line 12946 "parse.c"
     break;
 
   case 728: /* f_kwarg_arg_value: f_kw_arg_value  */
-#line 2463 "parse.y"
+#line 2482 "parse.y"
                     {
                         (yyval.node_kw_arg) = (yyvsp[0].node_kw_arg);
                     }
-#line 12950 "parse.c"
+#line 12954 "parse.c"
     break;
 
   case 729: /* f_kwarg_arg_value: f_kwarg_arg_value ',' f_kw_arg_value  */
-#line 2467 "parse.y"
+#line 2486 "parse.y"
                     {
                         (yyval.node_kw_arg) = kwd_append((yyvsp[-2].node_kw_arg), (yyvsp[0].node_kw_arg));
                     }
-#line 12958 "parse.c"
+#line 12962 "parse.c"
     break;
 
   case 730: /* opt_f_block_arg_opt_comma: ',' f_block_arg  */
-#line 2397 "parse.y"
+#line 2416 "parse.y"
                     {
                         (yyval.id) = (yyvsp[0].id);
                     }
-#line 12966 "parse.c"
+#line 12970 "parse.c"
     break;
 
   case 732: /* args_tail_basic_arg_value_opt_comma: f_kwarg_arg_value ',' f_kwrest opt_f_block_arg_opt_comma  */
-#line 2378 "parse.y"
+#line 2397 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, (yyvsp[-3].node_kw_arg), (yyvsp[-1].id), (yyvsp[0].id), &(yylsp[-1]));
                     }
-#line 12974 "parse.c"
+#line 12978 "parse.c"
     break;
 
   case 733: /* args_tail_basic_arg_value_opt_comma: f_kwarg_arg_value opt_f_block_arg_opt_comma  */
-#line 2382 "parse.y"
+#line 2401 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, (yyvsp[-1].node_kw_arg), 0, (yyvsp[0].id), &(yylsp[-1]));
                     }
-#line 12982 "parse.c"
+#line 12986 "parse.c"
     break;
 
   case 734: /* args_tail_basic_arg_value_opt_comma: f_any_kwrest opt_f_block_arg_opt_comma  */
-#line 2386 "parse.y"
+#line 2405 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, 0, (yyvsp[-1].id), (yyvsp[0].id), &(yylsp[-1]));
                     }
-#line 12990 "parse.c"
+#line 12994 "parse.c"
     break;
 
   case 735: /* args_tail_basic_arg_value_opt_comma: f_block_arg  */
-#line 2390 "parse.y"
+#line 2409 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, 0, 0, (yyvsp[0].id), &(yylsp[0]));
                     }
-#line 12998 "parse.c"
+#line 13002 "parse.c"
     break;
 
   case 737: /* args_tail: args_forward  */
-#line 5323 "parse.y"
+#line 5327 "parse.y"
                     {
                         add_forwarding_args(p);
                         (yyval.node_args) = new_args_tail(p, 0, (yyvsp[0].id), arg_FWD_BLOCK, &(yylsp[0]));
                         YSTUB("grammar"); /* PORTME: $$->nd_ainfo.forwarding = 1; */
                     }
-#line 13008 "parse.c"
+#line 13012 "parse.c"
     break;
 
   case 738: /* args_tail_basic_arg_value_none: f_kwarg_arg_value ',' f_kwrest opt_f_block_arg_none  */
-#line 2378 "parse.y"
+#line 2397 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, (yyvsp[-3].node_kw_arg), (yyvsp[-1].id), (yyvsp[0].id), &(yylsp[-1]));
                     }
-#line 13016 "parse.c"
+#line 13020 "parse.c"
     break;
 
   case 739: /* args_tail_basic_arg_value_none: f_kwarg_arg_value opt_f_block_arg_none  */
-#line 2382 "parse.y"
+#line 2401 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, (yyvsp[-1].node_kw_arg), 0, (yyvsp[0].id), &(yylsp[-1]));
                     }
-#line 13024 "parse.c"
+#line 13028 "parse.c"
     break;
 
   case 740: /* args_tail_basic_arg_value_none: f_any_kwrest opt_f_block_arg_none  */
-#line 2386 "parse.y"
+#line 2405 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, 0, (yyvsp[-1].id), (yyvsp[0].id), &(yylsp[-1]));
                     }
-#line 13032 "parse.c"
+#line 13036 "parse.c"
     break;
 
   case 741: /* args_tail_basic_arg_value_none: f_block_arg  */
-#line 2390 "parse.y"
+#line 2409 "parse.y"
                     {
                         (yyval.node_args) = new_args_tail(p, 0, 0, (yyvsp[0].id), &(yylsp[0]));
                     }
-#line 13040 "parse.c"
+#line 13044 "parse.c"
     break;
 
   case 743: /* largs_tail: args_forward  */
-#line 5332 "parse.y"
+#line 5336 "parse.y"
                     {
                         yyerror1(&(yylsp[0]), "unexpected ... in lambda argument");
                         (yyval.node_args) = new_args_tail(p, 0, 0, 0, &(yylsp[0]));
                         YSTUB("grammar"); /* PORTME: $$->nd_ainfo.forwarding = 1; */
                     }
-#line 13050 "parse.c"
+#line 13054 "parse.c"
     break;
 
   case 744: /* f_opt_arg_value: f_arg_asgn f_eq arg_value  */
-#line 2431 "parse.y"
+#line 2450 "parse.y"
                     {
                         p->ctxt.in_argdef = 1;
                         (yyval.node_opt_arg) = NEW_OPT_ARG(assignable(p, (yyvsp[-2].id), (yyvsp[0].node), &(yyloc)), &(yyloc));
                     }
-#line 13059 "parse.c"
+#line 13063 "parse.c"
     break;
 
   case 745: /* f_opt_arg_arg_value: f_opt_arg_value  */
-#line 2439 "parse.y"
+#line 2458 "parse.y"
                     {
                         (yyval.node_opt_arg) = (yyvsp[0].node_opt_arg);
                     }
-#line 13067 "parse.c"
+#line 13071 "parse.c"
     break;
 
   case 746: /* f_opt_arg_arg_value: f_opt_arg_arg_value ',' f_opt_arg_value  */
-#line 2443 "parse.y"
+#line 2462 "parse.y"
                     {
                         (yyval.node_opt_arg) = opt_arg_append((yyvsp[-2].node_opt_arg), (yyvsp[0].node_opt_arg));
                     }
-#line 13075 "parse.c"
+#line 13079 "parse.c"
     break;
 
   case 747: /* opt_args_tail_args_tail_opt_comma: ',' args_tail  */
-#line 2523 "parse.y"
+#line 2542 "parse.y"
                     {
                         (yyval.node_args) = (yyvsp[0].node_args);
                     }
-#line 13083 "parse.c"
+#line 13087 "parse.c"
     break;
 
   case 748: /* opt_args_tail_args_tail_opt_comma: opt_comma  */
-#line 2527 "parse.y"
+#line 2546 "parse.y"
                     {
                         (yyval.node_args) = new_empty_args_tail(p, &(yyloc));
                     }
-#line 13091 "parse.c"
+#line 13095 "parse.c"
     break;
 
   case 749: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_arg ',' f_opt_arg_arg_value ',' f_rest_arg opt_args_tail_args_tail_opt_comma  */
-#line 5341 "parse.y"
+#line 5345 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-5].node_args_aux), (yyvsp[-3].node_opt_arg), (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13099 "parse.c"
+#line 13103 "parse.c"
     break;
 
   case 750: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_arg ',' f_opt_arg_arg_value ',' f_rest_arg ',' f_arg opt_args_tail_args_tail_opt_comma  */
-#line 5345 "parse.y"
+#line 5349 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-7].node_args_aux), (yyvsp[-5].node_opt_arg), (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13107 "parse.c"
+#line 13111 "parse.c"
     break;
 
   case 751: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_arg ',' f_opt_arg_arg_value opt_args_tail_args_tail_opt_comma  */
-#line 5349 "parse.y"
+#line 5353 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-3].node_args_aux), (yyvsp[-1].node_opt_arg), 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13115 "parse.c"
+#line 13119 "parse.c"
     break;
 
   case 752: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_arg ',' f_opt_arg_arg_value ',' f_arg opt_args_tail_args_tail_opt_comma  */
-#line 5353 "parse.y"
+#line 5357 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-5].node_args_aux), (yyvsp[-3].node_opt_arg), 0, (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13123 "parse.c"
+#line 13127 "parse.c"
     break;
 
   case 753: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_arg ',' f_rest_arg opt_args_tail_args_tail_opt_comma  */
-#line 5357 "parse.y"
+#line 5361 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-3].node_args_aux), 0, (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13131 "parse.c"
+#line 13135 "parse.c"
     break;
 
   case 754: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_arg ',' f_rest_arg ',' f_arg opt_args_tail_args_tail_opt_comma  */
-#line 5361 "parse.y"
+#line 5365 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-5].node_args_aux), 0, (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13139 "parse.c"
+#line 13143 "parse.c"
     break;
 
   case 755: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_opt_arg_arg_value ',' f_rest_arg opt_args_tail_args_tail_opt_comma  */
-#line 5365 "parse.y"
+#line 5369 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-3].node_opt_arg), (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13147 "parse.c"
+#line 13151 "parse.c"
     break;
 
   case 756: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_opt_arg_arg_value ',' f_rest_arg ',' f_arg opt_args_tail_args_tail_opt_comma  */
-#line 5369 "parse.y"
+#line 5373 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-5].node_opt_arg), (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13155 "parse.c"
+#line 13159 "parse.c"
     break;
 
   case 757: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_opt_arg_arg_value opt_args_tail_args_tail_opt_comma  */
-#line 5373 "parse.y"
+#line 5377 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-1].node_opt_arg), 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13163 "parse.c"
+#line 13167 "parse.c"
     break;
 
   case 758: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_opt_arg_arg_value ',' f_arg opt_args_tail_args_tail_opt_comma  */
-#line 5377 "parse.y"
+#line 5381 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-3].node_opt_arg), 0, (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13171 "parse.c"
+#line 13175 "parse.c"
     break;
 
   case 759: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_rest_arg opt_args_tail_args_tail_opt_comma  */
-#line 5381 "parse.y"
+#line 5385 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, 0, (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13179 "parse.c"
+#line 13183 "parse.c"
     break;
 
   case 760: /* args-list_arg_value_opt_args_tail_args_tail_opt_comma: f_rest_arg ',' f_arg opt_args_tail_args_tail_opt_comma  */
-#line 5385 "parse.y"
+#line 5389 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, 0, (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13187 "parse.c"
+#line 13191 "parse.c"
     break;
 
   case 762: /* f_args-list_args_tail_opt_comma: f_arg opt_args_tail_args_tail_opt_comma  */
-#line 5400 "parse.y"
+#line 5404 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-1].node_args_aux), 0, 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13195 "parse.c"
+#line 13199 "parse.c"
     break;
 
   case 763: /* tail-only-args_args_tail: args_tail  */
-#line 5392 "parse.y"
+#line 5396 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, 0, 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13203 "parse.c"
+#line 13207 "parse.c"
     break;
 
   case 767: /* opt_args_tail_largs_tail_none: ',' largs_tail  */
-#line 2523 "parse.y"
+#line 2542 "parse.y"
                     {
                         (yyval.node_args) = (yyvsp[0].node_args);
                     }
-#line 13211 "parse.c"
+#line 13215 "parse.c"
     break;
 
   case 768: /* opt_args_tail_largs_tail_none: none  */
-#line 2527 "parse.y"
+#line 2546 "parse.y"
                     {
                         (yyval.node_args) = new_empty_args_tail(p, &(yyloc));
                     }
-#line 13219 "parse.c"
+#line 13223 "parse.c"
     break;
 
   case 769: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_arg ',' f_opt_arg_arg_value ',' f_rest_arg opt_args_tail_largs_tail_none  */
-#line 5341 "parse.y"
+#line 5345 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-5].node_args_aux), (yyvsp[-3].node_opt_arg), (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13227 "parse.c"
+#line 13231 "parse.c"
     break;
 
   case 770: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_arg ',' f_opt_arg_arg_value ',' f_rest_arg ',' f_arg opt_args_tail_largs_tail_none  */
-#line 5345 "parse.y"
+#line 5349 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-7].node_args_aux), (yyvsp[-5].node_opt_arg), (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13235 "parse.c"
+#line 13239 "parse.c"
     break;
 
   case 771: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_arg ',' f_opt_arg_arg_value opt_args_tail_largs_tail_none  */
-#line 5349 "parse.y"
+#line 5353 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-3].node_args_aux), (yyvsp[-1].node_opt_arg), 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13243 "parse.c"
+#line 13247 "parse.c"
     break;
 
   case 772: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_arg ',' f_opt_arg_arg_value ',' f_arg opt_args_tail_largs_tail_none  */
-#line 5353 "parse.y"
+#line 5357 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-5].node_args_aux), (yyvsp[-3].node_opt_arg), 0, (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13251 "parse.c"
+#line 13255 "parse.c"
     break;
 
   case 773: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_arg ',' f_rest_arg opt_args_tail_largs_tail_none  */
-#line 5357 "parse.y"
+#line 5361 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-3].node_args_aux), 0, (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13259 "parse.c"
+#line 13263 "parse.c"
     break;
 
   case 774: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_arg ',' f_rest_arg ',' f_arg opt_args_tail_largs_tail_none  */
-#line 5361 "parse.y"
+#line 5365 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-5].node_args_aux), 0, (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13267 "parse.c"
+#line 13271 "parse.c"
     break;
 
   case 775: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_opt_arg_arg_value ',' f_rest_arg opt_args_tail_largs_tail_none  */
-#line 5365 "parse.y"
+#line 5369 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-3].node_opt_arg), (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13275 "parse.c"
+#line 13279 "parse.c"
     break;
 
   case 776: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_opt_arg_arg_value ',' f_rest_arg ',' f_arg opt_args_tail_largs_tail_none  */
-#line 5369 "parse.y"
+#line 5373 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-5].node_opt_arg), (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13283 "parse.c"
+#line 13287 "parse.c"
     break;
 
   case 777: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_opt_arg_arg_value opt_args_tail_largs_tail_none  */
-#line 5373 "parse.y"
+#line 5377 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-1].node_opt_arg), 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13291 "parse.c"
+#line 13295 "parse.c"
     break;
 
   case 778: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_opt_arg_arg_value ',' f_arg opt_args_tail_largs_tail_none  */
-#line 5377 "parse.y"
+#line 5381 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, (yyvsp[-3].node_opt_arg), 0, (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13299 "parse.c"
+#line 13303 "parse.c"
     break;
 
   case 779: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_rest_arg opt_args_tail_largs_tail_none  */
-#line 5381 "parse.y"
+#line 5385 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, 0, (yyvsp[-1].id), 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13307 "parse.c"
+#line 13311 "parse.c"
     break;
 
   case 780: /* args-list_arg_value_opt_args_tail_largs_tail_none: f_rest_arg ',' f_arg opt_args_tail_largs_tail_none  */
-#line 5385 "parse.y"
+#line 5389 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, 0, (yyvsp[-3].id), (yyvsp[-1].node_args_aux), (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13315 "parse.c"
+#line 13319 "parse.c"
     break;
 
   case 782: /* f_args-list_largs_tail_none: f_arg opt_args_tail_largs_tail_none  */
-#line 5400 "parse.y"
+#line 5404 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, (yyvsp[-1].node_args_aux), 0, 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13323 "parse.c"
+#line 13327 "parse.c"
     break;
 
   case 783: /* tail-only-args_largs_tail: largs_tail  */
-#line 5392 "parse.y"
+#line 5396 "parse.y"
                     {
                         (yyval.node_args) = new_args(p, 0, 0, 0, 0, (yyvsp[0].node_args), &(yyloc));
                     }
-#line 13331 "parse.c"
+#line 13335 "parse.c"
     break;
 
   case 787: /* args_forward: "(..."  */
-#line 5414 "parse.y"
+#line 5418 "parse.y"
                     {
                         (yyval.id) = idFWD_KWREST;
                     }
-#line 13339 "parse.c"
+#line 13343 "parse.c"
     break;
 
   case 788: /* f_bad_arg: "constant"  */
-#line 5420 "parse.y"
+#line 5424 "parse.y"
                     {
                         static const char mesg[] = "formal argument cannot be a constant";
                         yyerror1(&(yylsp[0]), mesg);
                         (yyval.id) = 0;
                     }
-#line 13349 "parse.c"
+#line 13353 "parse.c"
     break;
 
   case 789: /* f_bad_arg: "instance variable"  */
-#line 5426 "parse.y"
+#line 5430 "parse.y"
                     {
                         static const char mesg[] = "formal argument cannot be an instance variable";
                         yyerror1(&(yylsp[0]), mesg);
                         (yyval.id) = 0;
                     }
-#line 13359 "parse.c"
+#line 13363 "parse.c"
     break;
 
   case 790: /* f_bad_arg: "global variable"  */
-#line 5432 "parse.y"
+#line 5436 "parse.y"
                     {
                         static const char mesg[] = "formal argument cannot be a global variable";
                         yyerror1(&(yylsp[0]), mesg);
                         (yyval.id) = 0;
                     }
-#line 13369 "parse.c"
+#line 13373 "parse.c"
     break;
 
   case 791: /* f_bad_arg: "class variable"  */
-#line 5438 "parse.y"
+#line 5442 "parse.y"
                     {
                         static const char mesg[] = "formal argument cannot be a class variable";
                         yyerror1(&(yylsp[0]), mesg);
                         (yyval.id) = 0;
                     }
-#line 13379 "parse.c"
+#line 13383 "parse.c"
     break;
 
   case 793: /* f_norm_arg: "local variable or method"  */
-#line 5447 "parse.y"
+#line 5451 "parse.y"
                     {
                         VALUE e = formal_argument_error(p, (yyval.id) = (yyvsp[0].id));
                         if (e) {
                         }
                         p->max_numparam = ORDINAL_PARAM;
                     }
-#line 13390 "parse.c"
+#line 13394 "parse.c"
     break;
 
   case 794: /* f_arg_asgn: f_norm_arg  */
-#line 5456 "parse.y"
+#line 5460 "parse.y"
                     {
                         arg_var(p, (yyvsp[0].id));
                         (yyval.id) = (yyvsp[0].id);
                     }
-#line 13399 "parse.c"
+#line 13403 "parse.c"
     break;
 
   case 795: /* f_arg_item: f_arg_asgn  */
-#line 5463 "parse.y"
+#line 5467 "parse.y"
                     {
                         (yyval.node_args_aux) = NEW_ARGS_AUX((yyvsp[0].id), 1, &NULL_LOC);
                     }
-#line 13407 "parse.c"
+#line 13411 "parse.c"
     break;
 
   case 796: /* f_arg_item: "(" f_margs rparen  */
-#line 5467 "parse.y"
+#line 5471 "parse.y"
                     {
                         ID tid = internal_id(p);
                         YYLTYPE loc;
@@ -13423,22 +13427,22 @@ yyreduce:
                         (yyval.node_args_aux) = NEW_ARGS_AUX(tid, 1, &NULL_LOC);
                         YSTUB("grammar"); /* PORTME: $$->nd_next = (NODE *)$2; */
                     }
-#line 13427 "parse.c"
+#line 13431 "parse.c"
     break;
 
   case 798: /* f_arg: f_arg ',' f_arg_item  */
-#line 5486 "parse.y"
+#line 5490 "parse.y"
                     {
                         (yyval.node_args_aux) = (yyvsp[-2].node_args_aux);
                         YSTUB("grammar"); /* PORTME: $$->nd_plen++; */
                         YSTUB("grammar"); /* PORTME: $$->nd_next = block_append(p, $$->nd_next, $3->nd_next); */
                         rb_discard_node(p, (NODE *)(yyvsp[0].node_args_aux));
                     }
-#line 13438 "parse.c"
+#line 13442 "parse.c"
     break;
 
   case 799: /* f_label: "label"  */
-#line 5496 "parse.y"
+#line 5500 "parse.y"
                     {
                         VALUE e = formal_argument_error(p, (yyval.id) = (yyvsp[0].id));
                         if (e) {
@@ -13454,97 +13458,97 @@ yyreduce:
                         p->max_numparam = ORDINAL_PARAM;
                         p->ctxt.in_argdef = 0;
                     }
-#line 13458 "parse.c"
+#line 13462 "parse.c"
     break;
 
   case 802: /* f_no_kwarg: p_kwnorest  */
-#line 5518 "parse.y"
+#line 5522 "parse.y"
                     {
                     }
-#line 13465 "parse.c"
+#line 13469 "parse.c"
     break;
 
   case 803: /* f_kwrest: kwrest_mark "local variable or method"  */
-#line 5523 "parse.y"
+#line 5527 "parse.y"
                     {
                         arg_var(p, shadowing_lvar(p, (yyvsp[0].id)));
                         (yyval.id) = (yyvsp[0].id);
                     }
-#line 13474 "parse.c"
+#line 13478 "parse.c"
     break;
 
   case 804: /* f_kwrest: kwrest_mark  */
-#line 5528 "parse.y"
+#line 5532 "parse.y"
                     {
                         arg_var(p, idFWD_KWREST);
                         (yyval.id) = idFWD_KWREST;
                     }
-#line 13483 "parse.c"
+#line 13487 "parse.c"
     break;
 
   case 807: /* f_rest_arg: restarg_mark "local variable or method"  */
-#line 5539 "parse.y"
+#line 5543 "parse.y"
                     {
                         arg_var(p, shadowing_lvar(p, (yyvsp[0].id)));
                         (yyval.id) = (yyvsp[0].id);
                     }
-#line 13492 "parse.c"
+#line 13496 "parse.c"
     break;
 
   case 808: /* f_rest_arg: restarg_mark  */
-#line 5544 "parse.y"
+#line 5548 "parse.y"
                     {
                         arg_var(p, idFWD_REST);
                         (yyval.id) = idFWD_REST;
                     }
-#line 13501 "parse.c"
+#line 13505 "parse.c"
     break;
 
   case 811: /* f_block_arg: blkarg_mark "local variable or method"  */
-#line 5555 "parse.y"
+#line 5559 "parse.y"
                     {
                         arg_var(p, shadowing_lvar(p, (yyvsp[0].id)));
                         (yyval.id) = (yyvsp[0].id);
                     }
-#line 13510 "parse.c"
+#line 13514 "parse.c"
     break;
 
   case 812: /* f_block_arg: blkarg_mark "'nil'"  */
-#line 5560 "parse.y"
+#line 5564 "parse.y"
                     {
                         (yyval.id) = idNil;
                     }
-#line 13518 "parse.c"
+#line 13522 "parse.c"
     break;
 
   case 813: /* f_block_arg: blkarg_mark  */
-#line 5564 "parse.y"
+#line 5568 "parse.y"
                     {
                         arg_var(p, idFWD_BLOCK);
                         (yyval.id) = idFWD_BLOCK;
                     }
-#line 13527 "parse.c"
+#line 13531 "parse.c"
     break;
 
   case 816: /* opt_comma: option_','  */
-#line 5571 "parse.y"
+#line 5575 "parse.y"
                     {
                         (yyval.id) = 0;
                     }
-#line 13535 "parse.c"
+#line 13539 "parse.c"
     break;
 
   case 817: /* value_expr_singleton_expr: singleton_expr  */
-#line 2569 "parse.y"
+#line 2588 "parse.y"
                     {
                         value_expr(p, (yyvsp[0].node));
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 13544 "parse.c"
+#line 13548 "parse.c"
     break;
 
   case 818: /* singleton: value_expr_singleton_expr  */
-#line 5578 "parse.y"
+#line 5582 "parse.y"
                     {
                         NODE *expr = last_expr_node((yyvsp[0].node));
                         switch (nd_type(expr)) {
@@ -13572,37 +13576,37 @@ yyreduce:
                         }
                         (yyval.node) = (yyvsp[0].node);
                     }
-#line 13576 "parse.c"
+#line 13580 "parse.c"
     break;
 
   case 820: /* $@41: %empty  */
-#line 5609 "parse.y"
+#line 5613 "parse.y"
                     {
                         SET_LEX_STATE(EXPR_BEG);
                         p->ctxt.in_argdef = 0;
                     }
-#line 13585 "parse.c"
+#line 13589 "parse.c"
     break;
 
   case 821: /* singleton_expr: '(' $@41 expr rparen  */
-#line 5614 "parse.y"
+#line 5618 "parse.y"
                     {
                         p->ctxt.in_argdef = 1;
                         (yyval.node) = (yyvsp[-1].node);
                     }
-#line 13594 "parse.c"
+#line 13598 "parse.c"
     break;
 
   case 823: /* assoc_list: assocs trailer  */
-#line 5622 "parse.y"
+#line 5626 "parse.y"
                     {
                         (yyval.node) = (yyvsp[-1].node);
                     }
-#line 13602 "parse.c"
+#line 13606 "parse.c"
     break;
 
   case 825: /* assocs: assocs ',' assoc  */
-#line 5629 "parse.y"
+#line 5633 "parse.y"
                     {
                         NODE *assocs = (yyvsp[-2].node);
                         NODE *tail = (yyvsp[0].node);
@@ -13617,64 +13621,64 @@ yyreduce:
                         }
                         (yyval.node) = assocs;
                     }
-#line 13621 "parse.c"
+#line 13625 "parse.c"
     break;
 
   case 826: /* assoc: arg_value "=>" arg_value  */
-#line 5646 "parse.y"
+#line 5650 "parse.y"
                     {
                         (yyval.node) = list_append(p, NEW_LIST((yyvsp[-2].node), &(yyloc)), (yyvsp[0].node));
                     }
-#line 13629 "parse.c"
+#line 13633 "parse.c"
     break;
 
   case 827: /* assoc: "label" arg_value  */
-#line 5650 "parse.y"
+#line 5654 "parse.y"
                     {
                         (yyval.node) = list_append(p, NEW_LIST(NEW_SYM(rb_id2str((yyvsp[-1].id)), &(yylsp[-1])), &(yyloc)), (yyvsp[0].node));
                     }
-#line 13637 "parse.c"
+#line 13641 "parse.c"
     break;
 
   case 828: /* assoc: "label"  */
-#line 5654 "parse.y"
+#line 5658 "parse.y"
                     {
                         NODE *val = gettable(p, (yyvsp[0].id), &(yyloc));
                         if (!val) val = NEW_ERROR(&(yyloc));
                         (yyval.node) = list_append(p, NEW_LIST(NEW_SYM(rb_id2str((yyvsp[0].id)), &(yylsp[0])), &(yyloc)), val);
                     }
-#line 13647 "parse.c"
+#line 13651 "parse.c"
     break;
 
   case 829: /* assoc: "string literal" string_contents tLABEL_END arg_value  */
-#line 5660 "parse.y"
+#line 5664 "parse.y"
                     {
                         YYLTYPE loc = code_loc_gen(&(yylsp[-3]), &(yylsp[-1]));
                         (yyval.node) = list_append(p, NEW_LIST(dsym_node(p, (yyvsp[-2].node), &loc), &loc), (yyvsp[0].node));
                     }
-#line 13656 "parse.c"
+#line 13660 "parse.c"
     break;
 
   case 830: /* assoc: "**arg" arg_value  */
-#line 5665 "parse.y"
+#line 5669 "parse.y"
                     {
                         (yyval.node) = list_append(p, NEW_LIST(0, &(yyloc)), (yyvsp[0].node));
                     }
-#line 13664 "parse.c"
+#line 13668 "parse.c"
     break;
 
   case 831: /* assoc: "**arg"  */
-#line 5669 "parse.y"
+#line 5673 "parse.y"
                     {
                         forwarding_arg_check(p, idFWD_KWREST, idFWD_ALL, "keyword rest");
                         (yyval.node) = list_append(p, NEW_LIST(0, &(yyloc)),
                                          NEW_LVAR(idFWD_KWREST, &(yyloc)));
                     }
-#line 13674 "parse.c"
+#line 13678 "parse.c"
     break;
 
   case 850: /* term: ';'  */
-#line 5715 "parse.y"
+#line 5719 "parse.y"
                     {
                         yyerrok;
                         token_flush(p);
@@ -13682,34 +13686,34 @@ yyreduce:
                             p->ctxt.has_trailing_semicolon = 1;
                         }
                     }
-#line 13686 "parse.c"
+#line 13690 "parse.c"
     break;
 
   case 851: /* term: '\n'  */
-#line 5723 "parse.y"
+#line 5727 "parse.y"
                     {
                         (yyloc).end = (yyloc).beg;
                         token_flush(p);
                     }
-#line 13695 "parse.c"
+#line 13699 "parse.c"
     break;
 
   case 853: /* terms: terms ';'  */
-#line 5730 "parse.y"
+#line 5734 "parse.y"
                             {yyerrok;}
-#line 13701 "parse.c"
+#line 13705 "parse.c"
     break;
 
   case 854: /* none: %empty  */
-#line 5734 "parse.y"
+#line 5738 "parse.y"
                     {
                         (yyval.node) = 0;
                     }
-#line 13709 "parse.c"
+#line 13713 "parse.c"
     break;
 
 
-#line 13713 "parse.c"
+#line 13717 "parse.c"
 
       default: break;
     }
@@ -13942,7 +13946,7 @@ yyreturnlab:
   return yyresult;
 }
 
-#line 5738 "parse.y"
+#line 5742 "parse.y"
 
 # undef p
 # undef yylex
@@ -17737,13 +17741,6 @@ node_newnode(struct parser_params *p, enum node_type type, size_t size, size_t a
  * at this boundary so the grammar actions above stay upstream-shaped.
  */
 
-/* The byte-offset YYLTYPE as a prism location. */
-static inline pm_location_t
-pm_yloc(const YYLTYPE *loc)
-{
-    return (pm_location_t) { loc->beg, loc->end - loc->beg };
-}
-
 /*
  * Take ownership of a lexer-built string's bytes as a node-held pm_string_t:
  * copied into the arena the node lives in, which is the convention prism's
@@ -17948,6 +17945,80 @@ pm_yfcall_args(struct parser_params *p, NODE *node, NODE *args, const YYLTYPE *l
     return node;
 }
 
+/* Wrap a body (or NULL) for a node that wants an optional StatementsNode:
+ * unlike pm_ystatements_ensure, an absent body stays absent. */
+static pm_statements_node_t *
+pm_ystatements_opt(struct parser_params *p, NODE *body)
+{
+    return body == NULL ? NULL : pm_ystatements_ensure(p, body);
+}
+
+/* An else clause, built at the opt_else reduction, which is the last moment
+ * the `else` keyword's location exists; the enclosing if/unless/begin fills
+ * in the end keyword when it closes. */
+static NODE *
+pm_yelse(struct parser_params *p, NODE *body, const YYLTYPE *else_loc, const YYLTYPE *loc)
+{
+    return (NODE *) pm_else_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(else_loc), pm_ystatements_opt(p, body), (pm_location_t) { 0 });
+}
+
+/* Attach the brackets to an array literal, and fold the static-literal flag
+ * the way the hand-written parser does: an array of static literals is one. */
+static NODE *
+pm_yarray_brackets(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_ARRAY_NODE)) {
+        YSTUB("pm_yarray_brackets");
+        return node;
+    }
+
+    pm_array_node_t *array = (pm_array_node_t *) node;
+    array->opening_loc = pm_yloc(opening);
+    array->closing_loc = pm_yloc(closing);
+    array->base.location = pm_yloc(loc);
+
+    bool is_static = true;
+    for (size_t index = 0; index < array->elements.size; index++) {
+        pm_node_t *element = array->elements.nodes[index];
+        /* Containers do not count as static elements, matching prism. */
+        if (!PM_NODE_FLAG_P(element, PM_NODE_FLAG_STATIC_LITERAL) ||
+            PM_NODE_TYPE_P(element, PM_ARRAY_NODE) || PM_NODE_TYPE_P(element, PM_HASH_NODE)) {
+            is_static = false;
+            break;
+        }
+    }
+    if (is_static) array->base.flags |= PM_NODE_FLAG_STATIC_LITERAL;
+
+    return node;
+}
+
+/* A parenthesized expression: CRuby drops grouping parens (or marks a block),
+ * prism keeps them as a node. */
+static NODE *
+pm_yparentheses(struct parser_params *p, NODE *body, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc)
+{
+    pm_statements_node_t *statements = pm_ystatements_opt(p, body);
+    pm_node_flags_t flags = 0;
+    if (statements != NULL && statements->body.size > 1) flags = PM_PARENTHESES_NODE_FLAGS_MULTIPLE_STATEMENTS;
+    return (NODE *) pm_parentheses_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+        (pm_node_t *) statements, pm_yloc(opening), pm_yloc(closing));
+}
+
+/* Attach the keywords to a begin/end block once it closes. */
+static NODE *
+pm_ybegin_keywords(struct parser_params *p, NODE *node, const YYLTYPE *begin_loc, const YYLTYPE *end_loc)
+{
+    if (node != NULL && PM_NODE_TYPE_P(node, PM_BEGIN_NODE)) {
+        pm_begin_node_t *begin = (pm_begin_node_t *) node;
+        begin->begin_keyword_loc = pm_yloc(begin_loc);
+        begin->end_keyword_loc = pm_yloc(end_loc);
+    }
+    return node;
+}
+
 /* Set the message location on a call once the operator/message token is at
  * hand; the constructors do not receive it. */
 static NODE *
@@ -17988,6 +18059,7 @@ pm_ystatements_ensure(struct parser_params *p, NODE *node)
     }
 
     pm_node_list_t body = { 0 };
+    node->flags |= PM_NODE_FLAG_NEWLINE;
     pm_node_list_append(p->pm->arena, &body, node);
     return pm_statements_node_new(p->pm->arena, ++p->pm->node_id, 0, node->location, body);
 }
@@ -18066,8 +18138,10 @@ rb_node_retry_new(struct parser_params *p, const YYLTYPE *loc)
 static rb_node_begin_t *
 rb_node_begin_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_begin_new");
-    return NULL;
+    return (rb_node_begin_t *) pm_begin_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        (pm_location_t) { 0 }, pm_ystatements_opt(p, nd_body),
+        NULL, NULL, NULL, (pm_location_t) { 0 });
 }
 
 static rb_node_rescue_t *
@@ -18094,15 +18168,17 @@ rb_node_ensure_new(struct parser_params *p, NODE *nd_head, NODE *nd_ensr, const 
 static rb_node_and_t *
 rb_node_and_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYPE *loc, const YYLTYPE *operator_loc)
 {
-    YSTUB("rb_node_and_new");
-    return NULL;
+    return (rb_node_and_t *) pm_and_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        nd_1st, nd_2nd, pm_yloc(operator_loc));
 }
 
 static rb_node_or_t *
 rb_node_or_new(struct parser_params *p, NODE *nd_1st, NODE *nd_2nd, const YYLTYPE *loc, const YYLTYPE *operator_loc)
 {
-    YSTUB("rb_node_or_new");
-    return NULL;
+    return (rb_node_or_t *) pm_or_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        nd_1st, nd_2nd, pm_yloc(operator_loc));
 }
 
 static rb_node_return_t *
@@ -18122,15 +18198,56 @@ rb_node_yield_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc, co
 static rb_node_if_t *
 rb_node_if_new(struct parser_params *p, NODE *nd_cond, NODE *nd_body, NODE *nd_else, const YYLTYPE *loc, const YYLTYPE* if_keyword_loc, const YYLTYPE* then_keyword_loc, const YYLTYPE* end_keyword_loc)
 {
-    YSTUB("rb_node_if_new");
-    return NULL;
+    pm_node_t *subsequent = nd_else;
+    pm_location_t end_keyword = pm_yloc(end_keyword_loc);
+    for (pm_node_t *chain = subsequent; chain != NULL;) {
+        if (end_keyword.length > 0) {
+            uint32_t end = end_keyword.start + end_keyword.length;
+            if (end > chain->location.start + chain->location.length) {
+                chain->location.length = end - chain->location.start;
+            }
+        }
+        if (PM_NODE_TYPE_P(chain, PM_ELSE_NODE)) {
+            ((pm_else_node_t *) chain)->end_keyword_loc = end_keyword;
+            break;
+        }
+        else if (PM_NODE_TYPE_P(chain, PM_IF_NODE)) {
+            pm_if_node_t *nested = (pm_if_node_t *) chain;
+            nested->end_keyword_loc = end_keyword;
+            chain = nested->subsequent;
+        }
+        else {
+            break;
+        }
+    }
+    return (rb_node_if_t *) pm_if_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(if_keyword_loc), nd_cond, pm_yloc(then_keyword_loc),
+        pm_ystatements_opt(p, nd_body), subsequent, end_keyword);
 }
 
 static rb_node_unless_t *
 rb_node_unless_new(struct parser_params *p, NODE *nd_cond, NODE *nd_body, NODE *nd_else, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *then_keyword_loc, const YYLTYPE *end_keyword_loc)
 {
-    YSTUB("rb_node_unless_new");
-    return NULL;
+    pm_else_node_t *else_clause = NULL;
+    pm_location_t end_keyword = pm_yloc(end_keyword_loc);
+    if (nd_else != NULL && PM_NODE_TYPE_P(nd_else, PM_ELSE_NODE)) {
+        else_clause = (pm_else_node_t *) nd_else;
+        else_clause->end_keyword_loc = end_keyword;
+        if (end_keyword.length > 0) {
+            uint32_t end = end_keyword.start + end_keyword.length;
+            if (end > else_clause->base.location.start + else_clause->base.location.length) {
+                else_clause->base.location.length = end - else_clause->base.location.start;
+            }
+        }
+    }
+    else if (nd_else != NULL) {
+        YSTUB("rb_node_unless_new");
+    }
+    return (rb_node_unless_t *) pm_unless_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(keyword_loc), nd_cond, pm_yloc(then_keyword_loc),
+        pm_ystatements_opt(p, nd_body), else_clause, end_keyword);
 }
 
 static rb_node_class_t *
@@ -18206,15 +18323,25 @@ rb_node_in_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, NODE *nd_n
 static rb_node_while_t *
 rb_node_while_new(struct parser_params *p, NODE *nd_cond, NODE *nd_body, long nd_state, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *closing_loc)
 {
-    YSTUB("rb_node_while_new");
-    return NULL;
+    pm_node_flags_t flags = nd_state == 0 ? PM_LOOP_FLAGS_BEGIN_MODIFIER : 0;
+    pm_location_t do_loc = { 0 };
+    if (p->ydo.set) { do_loc = pm_yloc(&p->ydo.loc); p->ydo.set = 0; }
+    return (rb_node_while_t *) pm_while_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+        pm_yloc(keyword_loc), do_loc, pm_yloc(closing_loc),
+        nd_cond, pm_ystatements_opt(p, nd_body));
 }
 
 static rb_node_until_t *
 rb_node_until_new(struct parser_params *p, NODE *nd_cond, NODE *nd_body, long nd_state, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *closing_loc)
 {
-    YSTUB("rb_node_until_new");
-    return NULL;
+    pm_node_flags_t flags = nd_state == 0 ? PM_LOOP_FLAGS_BEGIN_MODIFIER : 0;
+    pm_location_t do_loc = { 0 };
+    if (p->ydo.set) { do_loc = pm_yloc(&p->ydo.loc); p->ydo.set = 0; }
+    return (rb_node_until_t *) pm_until_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+        pm_yloc(keyword_loc), do_loc, pm_yloc(closing_loc),
+        nd_cond, pm_ystatements_opt(p, nd_body));
 }
 
 static rb_node_colon2_t *
@@ -18318,8 +18445,9 @@ rb_node_list_new2(struct parser_params *p, NODE *nd_head, long nd_alen, NODE *nd
 static rb_node_zlist_t *
 rb_node_zlist_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_zlist_new");
-    return NULL;
+    return (rb_node_zlist_t *) pm_array_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        (pm_node_list_t) { 0 }, (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static rb_node_hash_t *
@@ -19679,15 +19807,17 @@ new_nil_at(struct parser_params *p, const rb_code_position_t *pos)
 static NODE*
 new_if(struct parser_params *p, NODE *cc, NODE *left, NODE *right, const YYLTYPE *loc, const YYLTYPE* if_keyword_loc, const YYLTYPE* then_keyword_loc, const YYLTYPE* end_keyword_loc)
 {
-    YSTUB("new_if");
-    return NULL;
+    if (!cc) return right;
+    cc = cond(p, cc, loc);
+    return newline_node(NEW_IF(cc, left, right, loc, if_keyword_loc, then_keyword_loc, end_keyword_loc));
 }
 
 static NODE*
 new_unless(struct parser_params *p, NODE *cc, NODE *left, NODE *right, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *then_keyword_loc, const YYLTYPE *end_keyword_loc)
 {
-    YSTUB("new_unless");
-    return NULL;
+    if (!cc) return right;
+    cc = cond(p, cc, loc);
+    return newline_node(NEW_UNLESS(cc, left, right, loc, keyword_loc, then_keyword_loc, end_keyword_loc));
 }
 
 #define NEW_AND_OR(type, f, s, loc, op_loc) (type == NODE_AND ? NEW_AND(f,s,loc,op_loc) : NEW_OR(f,s,loc,op_loc))
@@ -19696,8 +19826,12 @@ static NODE*
 logop(struct parser_params *p, ID id, NODE *left, NODE *right,
           const YYLTYPE *op_loc, const YYLTYPE *loc)
 {
-    YSTUB("logop");
-    return NULL;
+    bool is_and = (id == idAND || id == idANDOP);
+    value_expr(p, left);
+
+    /* CRuby rebuilds `a and b and c` to nest rightward for its compiler;
+     * prism keeps the grammar's left association, so no rebuild here. */
+    return is_and ? (NODE *) NEW_AND(left, right, loc, op_loc) : (NODE *) NEW_OR(left, right, loc, op_loc);
 }
 
 #undef NEW_AND_OR
