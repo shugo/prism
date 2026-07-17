@@ -979,6 +979,13 @@ struct parser_params {
         YYLTYPE loc;
         unsigned int set: 1;
     } ydo;
+
+    /* fork: parameter nodes built at the marker reductions (where the
+     * `*`/`**`/`&` and name locations exist), consumed by new_args and
+     * new_args_tail, which upstream only sees the IDs. */
+    NODE *yrest_param;
+    NODE *ykwrest_param;
+    NODE *yblock_param;
     int tokidx;
     int toksiz;
     int heredoc_end;
@@ -1416,6 +1423,8 @@ static NODE *pm_yblock_params(struct parser_params *p, NODE *params, NODE *block
 static NODE *pm_yistr(struct parser_params *p, NODE *part);
 static NODE *pm_yindex_call(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
+static void pm_ymarker_param(struct parser_params *p, NODE **slot, int kind, ID name, const YYLTYPE *mark_loc, const YYLTYPE *name_loc);
+static NODE *pm_ykw_param(struct parser_params *p, ID label, NODE *value, const YYLTYPE *label_loc, const YYLTYPE *loc);
 static void pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -1746,8 +1755,8 @@ static NODE *new_bodystmt(struct parser_params *p, NODE *head, NODE *rescue, NOD
 
 static NODE *const_decl(struct parser_params *p, NODE* path, const YYLTYPE *loc);
 
-static rb_node_opt_arg_t *opt_arg_append(rb_node_opt_arg_t*, rb_node_opt_arg_t*);
-static rb_node_kw_arg_t *kwd_append(rb_node_kw_arg_t*, rb_node_kw_arg_t*);
+static rb_node_opt_arg_t *opt_arg_append(struct parser_params*, rb_node_opt_arg_t*, rb_node_opt_arg_t*);
+static rb_node_kw_arg_t *kwd_append(struct parser_params*, rb_node_kw_arg_t*, rb_node_kw_arg_t*);
 
 static NODE *new_hash(struct parser_params *p, NODE *hash, const YYLTYPE *loc);
 static NODE *new_unique_key_hash(struct parser_params *p, NODE *hash, const YYLTYPE *loc);
@@ -2026,6 +2035,7 @@ set_nd_value(struct parser_params *p, NODE *node, NODE *rhs)
       case PM_INSTANCE_VARIABLE_WRITE_NODE: ((pm_instance_variable_write_node_t *) node)->value = rhs; break;
       case PM_CLASS_VARIABLE_WRITE_NODE: ((pm_class_variable_write_node_t *) node)->value = rhs; break;
       case PM_CONSTANT_WRITE_NODE: ((pm_constant_write_node_t *) node)->value = rhs; break;
+      case PM_CONSTANT_PATH_WRITE_NODE: ((pm_constant_path_write_node_t *) node)->value = rhs; break;
       default:
         YSTUB("set_nd_value");
         break;
@@ -2042,7 +2052,7 @@ get_nd_vid(struct parser_params *p, NODE *node)
 static NODE *
 get_nd_args(struct parser_params *p, NODE *node)
 {
-    YSTUB("get_nd_args");
+    /* PORTME: returns the call's arguments once block-pass is ported */
     return NULL;
 }
 
@@ -2488,7 +2498,7 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
                 : f_arg_asgn f_eq value
                     {
                         p->ctxt.in_argdef = 1;
-                        $$ = NEW_OPT_ARG(assignable(p, $f_arg_asgn, $value, &@$), &@$);
+                        $$ = NEW_OPT_ARG(assignable(p, $f_arg_asgn, $value, &@f_arg_asgn), &@$);
                     }
                 ;
 
@@ -2499,7 +2509,7 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
                     }
                 | f_opt_arg(value) ',' f_opt(value)
                     {
-                        $$ = opt_arg_append($f_opt_arg, $f_opt);
+                        $$ = opt_arg_append(p, $f_opt_arg, $f_opt);
                     }
                 ;
 
@@ -2507,12 +2517,14 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
                 : f_label value
                     {
                         p->ctxt.in_argdef = 1;
-                        $$ = new_kw_arg(p, assignable(p, $f_label, $value, &@$), &@$);
+                        assignable(p, $f_label, $value, &@$); /* registers the local */
+                        $$ = (rb_node_kw_arg_t *) pm_ykw_param(p, $f_label, $value, &@f_label, &@$);
                     }
                 | f_label
                     {
                         p->ctxt.in_argdef = 1;
-                        $$ = new_kw_arg(p, assignable(p, $f_label, NODE_SPECIAL_REQUIRED_KEYWORD, &@$), &@$);
+                        assignable(p, $f_label, 0, &@$); /* registers the local */
+                        $$ = (rb_node_kw_arg_t *) pm_ykw_param(p, $f_label, NULL, &@f_label, &@$);
                     }
                 ;
 
@@ -2523,7 +2535,7 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
                     }
                 | f_kwarg(value) ',' f_kw(value)
                     {
-                        $$ = kwd_append($f_kwarg, $f_kw);
+                        $$ = kwd_append(p, $f_kwarg, $f_kw);
                     }
                 ;
 
@@ -2634,6 +2646,7 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
                 : begin ' '+ word_list tSTRING_END
                     {
                         $$ = make_list($word_list, &@$);
+                        $$ = pm_yarray_brackets(p, $$, &@begin, &@tSTRING_END, &@$);
                     }
                 ;
 
@@ -2813,8 +2826,9 @@ stmt		: keyword_alias[kw] fitem[new] {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fit
                 | stmt[body] modifier_while[mod] expr_value[cond_expr]
                     {
                         clear_block_exit(p, false);
-                        if ($body && nd_type_p($body, NODE_BEGIN)) {
-                            YSTUB("grammar"); /* PORTME: $$ = NEW_WHILE(cond(p, $cond_expr, &@cond_expr), RNODE_BEGIN($body)->nd_body, 0, &@$, &@mod, &NULL_L */
+                        if ($body && PM_NODE_TYPE_P($body, PM_BEGIN_NODE)) {
+                            /* prism keeps the begin in the body; only the flag differs */
+                            $$ = NEW_WHILE(cond(p, $cond_expr, &@cond_expr), $body, 0, &@$, &@mod, &NULL_LOC);
                         }
                         else {
                             $$ = NEW_WHILE(cond(p, $cond_expr, &@cond_expr), $body, 1, &@$, &@mod, &NULL_LOC);
@@ -2823,8 +2837,9 @@ stmt		: keyword_alias[kw] fitem[new] {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fit
                 | stmt[body] modifier_until[mod] expr_value[cond_expr]
                     {
                         clear_block_exit(p, 0);
-                        if ($body && nd_type_p($body, NODE_BEGIN)) {
-                            YSTUB("grammar"); /* PORTME: $$ = NEW_UNTIL(cond(p, $cond_expr, &@cond_expr), RNODE_BEGIN($body)->nd_body, 0, &@$, &@mod, &NULL_L */
+                        if ($body && PM_NODE_TYPE_P($body, PM_BEGIN_NODE)) {
+                            /* prism keeps the begin in the body; only the flag differs */
+                            $$ = NEW_UNTIL(cond(p, $cond_expr, &@cond_expr), $body, 0, &@$, &@mod, &NULL_LOC);
                         }
                         else {
                             $$ = NEW_UNTIL(cond(p, $cond_expr, &@cond_expr), $body, 1, &@$, &@mod, &NULL_LOC);
@@ -5580,11 +5595,13 @@ f_kwrest	: kwrest_mark tIDENTIFIER
                     {
                         arg_var(p, shadowing_lvar(p, $2));
                         $$ = $2;
+                        pm_ymarker_param(p, &p->ykwrest_param, 1, $2, &@1, &@2);
                     }
                 | kwrest_mark
                     {
                         arg_var(p, idFWD_KWREST);
                         $$ = idFWD_KWREST;
+                        pm_ymarker_param(p, &p->ykwrest_param, 1, 0, &@1, NULL);
                     }
                 ;
 
@@ -5596,11 +5613,13 @@ f_rest_arg	: restarg_mark tIDENTIFIER
                     {
                         arg_var(p, shadowing_lvar(p, $2));
                         $$ = $2;
+                        pm_ymarker_param(p, &p->yrest_param, 0, $2, &@1, &@2);
                     }
                 | restarg_mark
                     {
                         arg_var(p, idFWD_REST);
                         $$ = idFWD_REST;
+                        pm_ymarker_param(p, &p->yrest_param, 0, 0, &@1, NULL);
                     }
                 ;
 
@@ -5612,6 +5631,7 @@ f_block_arg	: blkarg_mark tIDENTIFIER
                     {
                         arg_var(p, shadowing_lvar(p, $2));
                         $$ = $2;
+                        pm_ymarker_param(p, &p->yblock_param, 2, $2, &@1, &@2);
                     }
                 | blkarg_mark keyword_nil
                     {
@@ -5621,6 +5641,7 @@ f_block_arg	: blkarg_mark tIDENTIFIER
                     {
                         arg_var(p, idFWD_BLOCK);
                         $$ = idFWD_BLOCK;
+                        pm_ymarker_param(p, &p->yblock_param, 2, 0, &@1, NULL);
                     }
                 ;
 
@@ -9848,7 +9869,10 @@ pm_ylocals(struct parser_params *p)
     if (tbl != NULL) {
         pm_constant_id_list_init_capacity(&p->pm->metadata_arena, &locals, (size_t) tbl->size);
         for (int i = 0; i < tbl->size; i++) {
-            pm_constant_id_list_append(&p->pm->metadata_arena, &locals, pm_yid2const(p, tbl->ids[i]));
+            /* anonymous forwarding markers (*, **, &, ...) are not locals */
+            ID id = tbl->ids[i];
+            if (id == idFWD_REST || id == idFWD_KWREST || id == idFWD_BLOCK || id == idFWD_ALL) continue;
+            pm_constant_id_list_append(&p->pm->metadata_arena, &locals, pm_yid2const(p, id));
         }
         xfree(tbl);
     }
@@ -10085,6 +10109,77 @@ pm_yhash_braces(struct parser_params *p, NODE *node, const YYLTYPE *opening, con
     if (is_static) hash->base.flags |= PM_NODE_FLAG_STATIC_LITERAL;
 
     return node;
+}
+
+/* Build a marker parameter (*rest, **kwrest, &block) at its reduction and
+ * park it for new_args/new_args_tail; the grammar's own value stays the ID. */
+static void
+pm_ymarker_param(struct parser_params *p, NODE **slot, int kind, ID name, const YYLTYPE *mark_loc, const YYLTYPE *name_loc)
+{
+    pm_location_t mark = pm_yloc(mark_loc);
+    pm_location_t name_location = { 0 };
+    pm_location_t location = mark;
+    pm_constant_id_t name_id = 0;
+
+    if (name_loc != NULL) {
+        name_location = pm_yloc(name_loc);
+        location.length = (name_location.start + name_location.length) - location.start;
+        name_id = pm_yid2const(p, name);
+    }
+
+    switch (kind) {
+      case 0:
+        *slot = (NODE *) pm_rest_parameter_node_new(p->pm->arena, ++p->pm->node_id, 0, location, name_id, name_location, mark);
+        break;
+      case 1:
+        *slot = (NODE *) pm_keyword_rest_parameter_node_new(p->pm->arena, ++p->pm->node_id, 0, location, name_id, name_location, mark);
+        break;
+      default:
+        *slot = (NODE *) pm_block_parameter_node_new(p->pm->arena, ++p->pm->node_id, 0, location, name_id, name_location, mark);
+        break;
+    }
+}
+
+/* A keyword parameter, required or optional by whether a default follows. */
+static NODE *
+pm_ykw_param(struct parser_params *p, ID label, NODE *value, const YYLTYPE *label_loc, const YYLTYPE *loc)
+{
+    /* the label token includes its colon; the name does not */
+    pm_location_t name_location = pm_yloc(label_loc);
+    pm_constant_id_t name = pm_yid2const(p, label);
+
+    NODE *param;
+    if (value == NULL || NODE_REQUIRED_KEYWORD_P(value)) {
+        param = (NODE *) pm_required_keyword_parameter_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, name_location, name, name_location);
+    }
+    else {
+        param = (NODE *) pm_optional_keyword_parameter_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), name, name_location, value);
+    }
+
+    pm_node_list_t elements = { 0 };
+    pm_node_list_append(p->pm->arena, &elements, param);
+    return (NODE *) pm_array_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, param->location, elements,
+        (pm_location_t) { 0 }, (pm_location_t) { 0 });
+}
+
+/* The `then` nonterminal spans a terminator, the keyword, or both; prism
+ * records only the keyword itself, or nothing when it was elided. */
+static pm_location_t
+pm_ythen_loc(struct parser_params *p, const YYLTYPE *loc)
+{
+    uint32_t beg = loc->beg;
+    uint32_t end = loc->end;
+    if (end - beg >= 4 && memcmp(p->pm->start + end - 4, "then", 4) == 0) {
+        return (pm_location_t) { end - 4, 4 };
+    }
+    /* the ternary operator records its ? here */
+    if (end - beg == 1 && p->pm->start[beg] == '?') {
+        return (pm_location_t) { beg, 1 };
+    }
+    return (pm_location_t) { 0 };
 }
 
 /* Assemble a case: split the clause carrier into when-conditions and the
@@ -10489,7 +10584,7 @@ rb_node_if_new(struct parser_params *p, NODE *nd_cond, NODE *nd_body, NODE *nd_e
     }
     return (rb_node_if_t *) pm_if_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
-        pm_yloc(if_keyword_loc), nd_cond, pm_yloc(then_keyword_loc),
+        pm_yloc(if_keyword_loc), nd_cond, pm_ythen_loc(p, then_keyword_loc),
         pm_ystatements_opt(p, nd_body), subsequent, end_keyword);
 }
 
@@ -10513,7 +10608,7 @@ rb_node_unless_new(struct parser_params *p, NODE *nd_cond, NODE *nd_body, NODE *
     }
     return (rb_node_unless_t *) pm_unless_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
-        pm_yloc(keyword_loc), nd_cond, pm_yloc(then_keyword_loc),
+        pm_yloc(keyword_loc), nd_cond, pm_ythen_loc(p, then_keyword_loc),
         pm_ystatements_opt(p, nd_body), else_clause, end_keyword);
 }
 
@@ -10602,11 +10697,7 @@ rb_node_when_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, NODE *nd
     }
 
     pm_location_t keyword = pm_yloc(keyword_loc);
-    pm_location_t then_keyword = { 0 };
-    if (then_keyword_loc->end - then_keyword_loc->beg == 4 &&
-        memcmp(p->pm->start + then_keyword_loc->beg, "then", 4) == 0) {
-        then_keyword = pm_yloc(then_keyword_loc);
-    }
+    pm_location_t then_keyword = pm_ythen_loc(p, then_keyword_loc);
 
     pm_statements_node_t *statements = pm_ystatements_opt(p, nd_body);
 
@@ -11160,8 +11251,14 @@ static rb_node_args_aux_t *
 rb_node_args_aux_new(struct parser_params *p, ID nd_pid, int nd_plen, const YYLTYPE *loc)
 {
     pm_location_t location = pm_yloc(loc);
+
+    /* a nameless internal ID means an unported path (destructured parameters);
+     * the YSTUB there already reported, so just keep the tree materializable */
+    pm_constant_id_t name = pm_yid2const(p, nd_pid);
+    if (name == PM_CONSTANT_ID_UNSET) return NULL;
+
     pm_node_t *required = (pm_node_t *) pm_required_parameter_node_new(
-        p->pm->arena, ++p->pm->node_id, 0, location, YID2CONST(nd_pid));
+        p->pm->arena, ++p->pm->node_id, 0, location, name);
 
     pm_node_list_t elements = { 0 };
     pm_node_list_append(p->pm->arena, &elements, required);
@@ -11174,8 +11271,30 @@ rb_node_args_aux_new(struct parser_params *p, ID nd_pid, int nd_plen, const YYLT
 static rb_node_opt_arg_t *
 rb_node_opt_arg_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_opt_arg_new");
-    return NULL;
+    if (nd_body == NULL || !PM_NODE_TYPE_P(nd_body, PM_LOCAL_VARIABLE_WRITE_NODE)) {
+        YSTUB("rb_node_opt_arg_new");
+        return NULL;
+    }
+
+    pm_local_variable_write_node_t *write = (pm_local_variable_write_node_t *) nd_body;
+
+    /* the `=` between name and default, by the usual scan */
+    pm_location_t operator = { 0 };
+    if (write->value != NULL) {
+        uint32_t scan = write->name_loc.start + write->name_loc.length;
+        while (scan < write->value->location.start && p->pm->start[scan] != '=') scan++;
+        if (scan < write->value->location.start) operator = (pm_location_t) { scan, 1 };
+    }
+
+    NODE *param = (NODE *) pm_optional_parameter_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        write->name, write->name_loc, operator, write->value);
+
+    pm_node_list_t elements = { 0 };
+    pm_node_list_append(p->pm->arena, &elements, param);
+    return (rb_node_opt_arg_t *) pm_array_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, param->location, elements,
+        (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static rb_node_kw_arg_t *
@@ -11366,10 +11485,15 @@ static rb_node_cdecl_t *
 rb_node_cdecl_new(struct parser_params *p, ID nd_vid, NODE *nd_value, NODE *nd_else, enum rb_parser_shareability shareability, const YYLTYPE *loc)
 {
     if (nd_else != 0) {
-        /* Scoped constant assignment (A::B = ...) arrives with the constant
-         * path port. */
-        YSTUB("rb_node_cdecl_new");
-        return NULL;
+        /* Scoped constant assignment: the path is the target; the operator
+         * and value are filled in by node_assign. */
+        if (!PM_NODE_TYPE_P(nd_else, PM_CONSTANT_PATH_NODE)) {
+            YSTUB("rb_node_cdecl_new");
+            return NULL;
+        }
+        return (NODE *) pm_constant_path_write_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, nd_else->location,
+            (pm_constant_path_node_t *) nd_else, (pm_location_t) { 0 }, nd_value);
     }
     (void) shareability;
     pm_location_t name_loc = pm_yloc(loc);
@@ -11839,15 +11963,15 @@ gettable(struct parser_params *p, ID id, const YYLTYPE *loc)
 }
 
 static rb_node_opt_arg_t *
-opt_arg_append(rb_node_opt_arg_t *opt_list, rb_node_opt_arg_t *opt)
+opt_arg_append(struct parser_params *p, rb_node_opt_arg_t *opt_list, rb_node_opt_arg_t *opt)
 {
-    return opt_list;
+    return (rb_node_opt_arg_t *) list_concat(p, (NODE *) opt_list, (NODE *) opt);
 }
 
 static rb_node_kw_arg_t *
-kwd_append(rb_node_kw_arg_t *kwlist, rb_node_kw_arg_t *kw)
+kwd_append(struct parser_params *p, rb_node_kw_arg_t *kwlist, rb_node_kw_arg_t *kw)
 {
-    return kwlist;
+    return (rb_node_kw_arg_t *) list_concat(p, (NODE *) kwlist, (NODE *) kw);
 }
 
 static NODE *
@@ -11938,8 +12062,7 @@ static int nd_type_st_key_enable_p(NODE *node);
 static void
 check_literal_when(struct parser_params *p, NODE *arg, const YYLTYPE *loc)
 {
-    YSTUB("check_literal_when");
-    return;
+    /* duplicate-when-literal warnings are deferred with all warnings */
 }
 
 
@@ -12116,8 +12239,8 @@ new_bv(struct parser_params *p, ID name)
 static void
 aryset_check(struct parser_params *p, NODE *args)
 {
-    YSTUB("aryset_check");
-    return;
+    /* PORTME: rejects block/keyword arguments in an index assignment,
+     * which cannot be built until block-pass and kwargs are ported */
 }
 
 static NODE *
@@ -12130,8 +12253,7 @@ aryset(struct parser_params *p, NODE *recv, NODE *idx, const YYLTYPE *loc)
 static void
 block_dup_check(struct parser_params *p, NODE *node1, NODE *node2)
 {
-    YSTUB("block_dup_check");
-    return;
+    /* PORTME: block-pass + literal block duplication check */
 }
 
 static NODE *
@@ -12232,6 +12354,9 @@ node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ct
         goto assign;
       case PM_CONSTANT_WRITE_NODE:
         ((pm_constant_write_node_t *) lhs)->operator_loc = operator_loc;
+        goto assign;
+      case PM_CONSTANT_PATH_WRITE_NODE:
+        ((pm_constant_path_write_node_t *) lhs)->operator_loc = operator_loc;
         goto assign;
       assign:
         set_nd_value(p, lhs, rhs);
@@ -12414,8 +12539,8 @@ logop(struct parser_params *p, ID id, NODE *left, NODE *right,
 static void
 no_blockarg(struct parser_params *p, NODE *node)
 {
-    YSTUB("no_blockarg");
-    return;
+    /* PORTME: rejects a block-pass argument here, which cannot be built
+     * until block-pass is ported */
 }
 
 static NODE *
@@ -12460,28 +12585,81 @@ args_info_empty_p(struct rb_args_info *args)
 static rb_node_args_t *
 new_args(struct parser_params *p, rb_node_args_aux_t *pre_args, rb_node_opt_arg_t *opt_args, ID rest_arg, rb_node_args_aux_t *post_args, rb_node_args_t *tail, const YYLTYPE *loc)
 {
-    if (opt_args == NULL && rest_arg == 0 && post_args == NULL && tail == NULL) {
-        if (pre_args == NULL) return NULL;
+    if (pre_args == NULL && opt_args == NULL && rest_arg == 0 && post_args == NULL && tail == NULL) return NULL;
 
-        if (PM_NODE_TYPE_P((NODE *) pre_args, PM_ARRAY_NODE)) {
-            pm_array_node_t *carrier = (pm_array_node_t *) pre_args;
-            return (rb_node_args_t *) pm_parameters_node_new(
-                p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
-                carrier->elements, (pm_node_list_t) { 0 }, NULL,
-                (pm_node_list_t) { 0 }, (pm_node_list_t) { 0 }, NULL, NULL);
-        }
+    pm_node_list_t requireds = { 0 };
+    pm_node_list_t optionals = { 0 };
+    pm_node_list_t posts = { 0 };
+    pm_node_t *rest = NULL;
+
+    if (pre_args != NULL) {
+        if (PM_NODE_TYPE_P((NODE *) pre_args, PM_ARRAY_NODE)) requireds = ((pm_array_node_t *) pre_args)->elements;
+        else { YSTUB("new_args"); }
+    }
+    if (opt_args != NULL) {
+        if (PM_NODE_TYPE_P((NODE *) opt_args, PM_ARRAY_NODE)) optionals = ((pm_array_node_t *) opt_args)->elements;
+        else { YSTUB("new_args"); }
+    }
+    if (post_args != NULL) {
+        if (PM_NODE_TYPE_P((NODE *) post_args, PM_ARRAY_NODE)) posts = ((pm_array_node_t *) post_args)->elements;
+        else { YSTUB("new_args"); }
+    }
+    if (rest_arg != 0) {
+        rest = p->yrest_param;
+        p->yrest_param = NULL;
     }
 
-    YSTUB("new_args");
-    return NULL;
+    pm_parameters_node_t *parameters;
+    if (tail != NULL && PM_NODE_TYPE_P((NODE *) tail, PM_PARAMETERS_NODE)) {
+        parameters = (pm_parameters_node_t *) tail;
+    }
+    else {
+        if (tail != NULL) YSTUB("new_args");
+        parameters = pm_parameters_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, (pm_location_t) { 0 },
+            (pm_node_list_t) { 0 }, (pm_node_list_t) { 0 }, NULL,
+            (pm_node_list_t) { 0 }, (pm_node_list_t) { 0 }, NULL, NULL);
+    }
+
+    parameters->requireds = requireds;
+    parameters->optionals = optionals;
+    parameters->rest = rest;
+    parameters->posts = posts;
+    parameters->base.location = pm_yloc(loc);
+    return (rb_node_args_t *) parameters;
 }
 
 static rb_node_args_t *
 new_args_tail(struct parser_params *p, rb_node_kw_arg_t *kw_args, ID kw_rest_arg, ID block, const YYLTYPE *kw_rest_loc)
 {
     if (kw_args == NULL && kw_rest_arg == 0 && block == 0) return NULL;
-    YSTUB("new_args_tail");
-    return NULL;
+    (void) kw_rest_loc;
+
+    pm_node_list_t keywords = { 0 };
+    if (kw_args != NULL && PM_NODE_TYPE_P((NODE *) kw_args, PM_ARRAY_NODE)) {
+        keywords = ((pm_array_node_t *) kw_args)->elements;
+    }
+    else if (kw_args != NULL) {
+        YSTUB("new_args_tail");
+    }
+
+    pm_node_t *keyword_rest = NULL;
+    if (kw_rest_arg != 0) {
+        keyword_rest = p->ykwrest_param;
+        p->ykwrest_param = NULL;
+    }
+
+    pm_node_t *block_param = NULL;
+    if (block != 0) {
+        block_param = p->yblock_param;
+        p->yblock_param = NULL;
+        if (block == idNil) YSTUB("new_args_tail &nil");
+    }
+
+    return (rb_node_args_t *) pm_parameters_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, (pm_location_t) { 0 },
+        (pm_node_list_t) { 0 }, (pm_node_list_t) { 0 }, NULL,
+        (pm_node_list_t) { 0 }, keywords, keyword_rest, (pm_node_t *) block_param);
 }
 
 static rb_node_args_t *
@@ -12747,8 +12925,10 @@ new_const_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct
 static NODE *
 const_decl(struct parser_params *p, NODE *path, const YYLTYPE *loc)
 {
-    YSTUB("const_decl");
-    return NULL;
+    if (p->ctxt.in_def) {
+        yyerror1(loc, "dynamic constant assignment");
+    }
+    return NEW_CDECL(0, 0, (path), p->ctxt.shareable_constant_value, loc);
 }
 
 
@@ -13360,7 +13540,10 @@ pm_yparse(pm_parser_t *pm)
     parser_prepare(p);
     yyparse(p);
 
-    pm_node_t *tree = pm_yparse_program(p, p->eval_tree);
+    /* A reported error means some action could not build its node; anything
+     * downstream of that point may hold NULLs where required children belong,
+     * so only the guaranteed-consistent empty program is safe to hand out. */
+    pm_node_t *tree = pm_yparse_program(p, p->error_p ? NULL : p->eval_tree);
 
     /* Everything below is transient state the parse allocated outside the
      * arenas; the tree itself is arena-allocated and survives. */
