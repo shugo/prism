@@ -1780,15 +1780,28 @@ static NODE *call_bin_op(struct parser_params*,NODE*,ID,NODE*,const YYLTYPE*,con
 static NODE *call_uni_op(struct parser_params*,NODE*,ID,const YYLTYPE*,const YYLTYPE*);
 static NODE *new_qcall(struct parser_params* p, ID atype, NODE *recv, ID mid, NODE *args, const YYLTYPE *op_loc, const YYLTYPE *loc);
 static NODE *new_command_qcall(struct parser_params* p, ID atype, NODE *recv, ID mid, NODE *args, NODE *block, const YYLTYPE *op_loc, const YYLTYPE *loc);
-static NODE *method_add_block(struct parser_params*p, NODE *m, NODE *b, const YYLTYPE *loc)
+static NODE *
+method_add_block(struct parser_params *p, NODE *m, NODE *b, const YYLTYPE *loc)
 {
-    if (m != NULL && b != NULL && PM_NODE_TYPE_P(m, PM_CALL_NODE) && PM_NODE_TYPE_P(b, PM_BLOCK_NODE)) {
-        ((pm_call_node_t *) m)->block = b;
-        m->location = pm_yloc(loc);
+    if (m != NULL && b != NULL && PM_NODE_TYPE_P(b, PM_BLOCK_NODE)) {
+        switch (PM_NODE_TYPE(m)) {
+          case PM_CALL_NODE:
+            ((pm_call_node_t *) m)->block = b;
+            m->location = pm_yloc(loc);
+            return m;
+          case PM_SUPER_NODE:
+            ((pm_super_node_t *) m)->block = b;
+            m->location = pm_yloc(loc);
+            return m;
+          case PM_FORWARDING_SUPER_NODE:
+            ((pm_forwarding_super_node_t *) m)->block = (pm_block_node_t *) b;
+            m->location = pm_yloc(loc);
+            return m;
+          default:
+            break;
+        }
     }
-    else {
-        YSTUB("method_add_block");
-    }
+    YSTUB("method_add_block");
     return m;
 }
 static NODE *command_add_block(struct parser_params*p, NODE *m, NODE *b, const YYLTYPE *loc);
@@ -1840,7 +1853,8 @@ static NODE *new_defined(struct parser_params *p, NODE *expr, const YYLTYPE *loc
 
 static NODE *new_regexp(struct parser_params *, NODE *, int, const YYLTYPE *, const YYLTYPE *, const YYLTYPE *, const YYLTYPE *);
 
-#define make_list(list, loc) ((list) ? (((NODE *)(list))->location = pm_yloc(loc), (list)) : NEW_ZLIST(loc))
+#define make_list(list, loc) pm_ymake_list(p, (NODE *) (list), (loc))
+static NODE *pm_ymake_list(struct parser_params *p, NODE *list, const YYLTYPE *loc);
 
 static NODE *new_xstring(struct parser_params *p, NODE *node, const YYLTYPE *opening_loc, const YYLTYPE *closing_loc, const YYLTYPE *loc);
 
@@ -10461,6 +10475,16 @@ pm_ypattern_delims(struct parser_params *p, NODE *node, const YYLTYPE *opening, 
     return node;
 }
 
+/* The value of a bracketed list: the carrier picks up the bracket span, a
+ * lone splat keeps its own, and nothing at all is an empty list. */
+static NODE *
+pm_ymake_list(struct parser_params *p, NODE *list, const YYLTYPE *loc)
+{
+    if (list == NULL) return NEW_ZLIST(loc);
+    if (PM_NODE_TYPE_P(list, PM_ARRAY_NODE)) list->location = pm_yloc(loc);
+    return list;
+}
+
 /* A pinned variable pattern: ^x. */
 static NODE *
 pm_ypinned_var(struct parser_params *p, NODE *variable, const YYLTYPE *operator_loc, const YYLTYPE *loc)
@@ -10867,6 +10891,15 @@ pm_yelse(struct parser_params *p, NODE *body, const YYLTYPE *else_loc, const YYL
 static NODE *
 pm_yarray_brackets(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc)
 {
+    if (node != NULL && PM_NODE_TYPE_P(node, PM_SPLAT_NODE)) {
+        /* [*a]: the lone splat arrives unwrapped */
+        pm_node_list_t elements = { 0 };
+        pm_node_list_append(p->pm->arena, &elements, node);
+        node = (NODE *) pm_array_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, node->location, elements,
+            (pm_location_t) { 0 }, (pm_location_t) { 0 });
+    }
+
     if (node == NULL || !PM_NODE_TYPE_P(node, PM_ARRAY_NODE)) {
         YSTUB("pm_yarray_brackets");
         return node;
@@ -10880,11 +10913,13 @@ pm_yarray_brackets(struct parser_params *p, NODE *node, const YYLTYPE *opening, 
     bool is_static = true;
     for (size_t index = 0; index < array->elements.size; index++) {
         pm_node_t *element = array->elements.nodes[index];
+        if (PM_NODE_TYPE_P(element, PM_SPLAT_NODE)) {
+            array->base.flags |= PM_ARRAY_NODE_FLAGS_CONTAINS_SPLAT;
+        }
         /* Containers do not count as static elements, matching prism. */
         if (!PM_NODE_FLAG_P(element, PM_NODE_FLAG_STATIC_LITERAL) ||
             PM_NODE_TYPE_P(element, PM_ARRAY_NODE) || PM_NODE_TYPE_P(element, PM_HASH_NODE)) {
             is_static = false;
-            break;
         }
     }
     if (is_static) array->base.flags |= PM_NODE_FLAG_STATIC_LITERAL;
@@ -11926,10 +11961,27 @@ static rb_node_str_t *
 rb_node_str_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc)
 {
     pm_location_t content_loc = pm_yloc(loc);
+    pm_string_t unescaped = pm_ystr_take(p, string);
+
+    /* non-ASCII bytes produced by escapes (the source itself is ASCII) force
+     * the encoding onto the literal */
+    pm_node_flags_t flags = 0;
+    if (!pm_ystr_ascii_only(&unescaped)) {
+        bool source_ascii = true;
+        for (uint32_t i = content_loc.start; i < content_loc.start + content_loc.length; i++) {
+            if (p->pm->start[i] >= 0x80) { source_ascii = false; break; }
+        }
+        if (source_ascii) {
+            flags |= (p->enc == rb_utf8_encoding())
+                ? PM_STRING_FLAGS_FORCED_UTF8_ENCODING
+                : PM_STRING_FLAGS_FORCED_BINARY_ENCODING;
+        }
+    }
+
     return (rb_node_str_t *) pm_string_node_new(
-        p->pm->arena, ++p->pm->node_id, 0, content_loc,
+        p->pm->arena, ++p->pm->node_id, flags, content_loc,
         (pm_location_t) { 0 }, content_loc, (pm_location_t) { 0 },
-        pm_ystr_take(p, string));
+        unescaped);
 }
 
 /* TODO; Use union for NODE_DSTR2 */
@@ -12576,7 +12628,36 @@ literal_concat(struct parser_params *p, NODE *head, NODE *tail, const YYLTYPE *l
         }
     }
 
-    if (!tail_str && !tail_embedded) {
+    bool tail_istr = PM_NODE_TYPE_P(tail, PM_INTERPOLATED_STRING_NODE);
+    if (!tail_str && !tail_embedded && !tail_istr) {
+        YSTUB("literal_concat");
+        return head;
+    }
+
+    /* a tail with its own quotes is literal adjacency: "a" "b" collects the
+     * complete literals as the parts of an unquoted outer carrier */
+    bool tail_complete =
+        (tail_str && ((pm_string_node_t *) tail)->opening_loc.length > 0) ||
+        (tail_istr && ((pm_interpolated_string_node_t *) tail)->opening_loc.length > 0);
+    if (tail_complete) {
+        pm_interpolated_string_node_t *outer;
+        if (head_istr && ((pm_interpolated_string_node_t *) head)->opening_loc.length == 0) {
+            outer = (pm_interpolated_string_node_t *) head;
+        }
+        else {
+            pm_node_list_t parts = { 0 };
+            pm_node_list_append(p->pm->arena, &parts, pm_yistr_part(head));
+            outer = pm_interpolated_string_node_new(
+                p->pm->arena, ++p->pm->node_id, 0, head->location,
+                (pm_location_t) { 0 }, parts, (pm_location_t) { 0 });
+        }
+        pm_node_list_append(p->pm->arena, &outer->parts, pm_yistr_part(tail));
+        uint32_t end = tail->location.start + tail->location.length;
+        outer->base.location.length = end - outer->base.location.start;
+        return (NODE *) outer;
+    }
+
+    if (tail_istr) {
         YSTUB("literal_concat");
         return head;
     }
@@ -12702,9 +12783,7 @@ new_command_qcall(struct parser_params* p, ID atype, NODE *recv, ID mid, NODE *a
     NODE *ret;
     if (block) block_dup_check(p, args, block);
     ret = new_qcall(p, atype, recv, mid, args, op_loc, loc);
-    if (block) {
-        YSTUB("new_command_qcall");
-    }
+    if (block) ret = method_add_block(p, ret, block, loc);
     return ret;
 }
 
@@ -12719,10 +12798,9 @@ new_locations_lambda_body(struct parser_params* p, NODE *node, const YYLTYPE *lo
 }
 
 static NODE *
-command_add_block(struct parser_params*p, NODE *m, NODE *b, const YYLTYPE *loc)
+command_add_block(struct parser_params *p, NODE *m, NODE *b, const YYLTYPE *loc)
 {
-    YSTUB("command_add_block");
-    return NULL;
+    return method_add_block(p, m, b, loc);
 }
 
 #define nd_once_body(node) (nd_type_p((node), NODE_ONCE) ? RNODE_ONCE(node)->nd_body : node)
@@ -12995,6 +13073,14 @@ symbol_append(struct parser_params *p, NODE *symbols, NODE *symbol)
             p->pm->arena, ++p->pm->node_id, flags, string->base.location,
             (pm_location_t) { 0 }, string->content_loc, (pm_location_t) { 0 },
             string->unescaped);
+    }
+    else if (symbol != NULL && (PM_NODE_TYPE_P(symbol, PM_INTERPOLATED_STRING_NODE) ||
+                                PM_NODE_TYPE_P(symbol, PM_EMBEDDED_STATEMENTS_NODE) ||
+                                PM_NODE_TYPE_P(symbol, PM_EMBEDDED_VARIABLE_NODE))) {
+        if (!PM_NODE_TYPE_P(symbol, PM_INTERPOLATED_STRING_NODE)) symbol = pm_yistr(p, symbol);
+        symbol = (NODE *) pm_interpolated_symbol_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, symbol->location,
+            (pm_location_t) { 0 }, ((pm_interpolated_string_node_t *) symbol)->parts, (pm_location_t) { 0 });
     }
     else {
         YSTUB("symbol_append");
