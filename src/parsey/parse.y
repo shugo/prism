@@ -508,7 +508,15 @@ static rb_parser_string_t *pm_yid2str(struct parser_params *p, ID id);
 
 /* The newline flag maps directly onto prism's. */
 #define nd_set_fl_newline(n) ((void) ((n) != NULL && ((n)->flags |= PM_NODE_FLAG_NEWLINE)))
-#define nd_unset_fl_newline(n) ((void) ((n) != NULL && ((n)->flags &= (pm_node_flags_t) ~PM_NODE_FLAG_NEWLINE)))
+static inline void
+nd_unset_fl_newline(NODE *n)
+{
+    if (n == NULL) return;
+    /* A statements list keeps its members' markers; only a lone expression
+     * loses its (see the embedded-statements constructor). */
+    if (PM_NODE_TYPE_P(n, PM_STATEMENTS_NODE)) return;
+    n->flags &= (pm_node_flags_t) ~PM_NODE_FLAG_NEWLINE;
+}
 
 /* The pattern-matching duplicate tables arrive with the pattern port. */
 #define st_init_numtable() NULL
@@ -1405,6 +1413,7 @@ static NODE *pm_yensure(struct parser_params *p, NODE *body, const YYLTYPE *ensu
 static NODE *pm_yrescue_finish(struct parser_params *p, NODE *node, const YYLTYPE *keyword_loc, const YYLTYPE *then_loc);
 static NODE *pm_yrescue_modifier(struct parser_params *p, NODE *expr, NODE *fallback, const YYLTYPE *keyword_loc, const YYLTYPE *loc);
 static NODE *pm_yblock_params(struct parser_params *p, NODE *params, NODE *block_locals, const YYLTYPE *opening, const YYLTYPE *closing);
+static NODE *pm_yistr(struct parser_params *p, NODE *part);
 static void pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -9610,6 +9619,20 @@ string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *openin
         string->content_loc = (pm_location_t) { opening->end, closing->beg - opening->end };
         string->base.location = pm_yloc(loc);
     }
+    else if (PM_NODE_TYPE_P(node, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(node, PM_EMBEDDED_VARIABLE_NODE)) {
+        /* A string that is one interpolation and nothing else. */
+        node = pm_yistr(p, node);
+        pm_interpolated_string_node_t *istr = (pm_interpolated_string_node_t *) node;
+        istr->opening_loc = pm_yloc(opening);
+        istr->closing_loc = pm_yloc(closing);
+        istr->base.location = pm_yloc(loc);
+    }
+    else if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) {
+        pm_interpolated_string_node_t *istr = (pm_interpolated_string_node_t *) node;
+        istr->opening_loc = pm_yloc(opening);
+        istr->closing_loc = pm_yloc(closing);
+        istr->base.location = pm_yloc(loc);
+    }
     else {
         YSTUB("string_literal_quotes");
     }
@@ -9928,6 +9951,29 @@ pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword)
         uint32_t end = next_keyword.start + next_keyword.length;
         else_clause->base.location.length = end - else_clause->base.location.start;
     }
+}
+
+/* A string part entering an interpolation freezes: fragments of an
+ * interpolated string are deduplicated literals like hash keys. */
+static NODE *
+pm_yistr_part(NODE *part)
+{
+    if (part != NULL && PM_NODE_TYPE_P(part, PM_STRING_NODE)) {
+        part->flags |= PM_STRING_FLAGS_FROZEN | PM_NODE_FLAG_STATIC_LITERAL;
+    }
+    return part;
+}
+
+/* Wrap the first part of an interpolation into its carrier. */
+static NODE *
+pm_yistr(struct parser_params *p, NODE *part)
+{
+    pm_node_list_t parts = { 0 };
+    pm_location_t location = part != NULL ? part->location : (pm_location_t) { 0 };
+    if (part != NULL) pm_node_list_append(p->pm->arena, &parts, pm_yistr_part(part));
+    return (NODE *) pm_interpolated_string_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, location,
+        (pm_location_t) { 0 }, parts, (pm_location_t) { 0 });
 }
 
 /* The |params| of a block. */
@@ -10884,8 +10930,28 @@ rb_node_dsym_new(struct parser_params *p, rb_parser_string_t *string, long nd_al
 static rb_node_evstr_t *
 rb_node_evstr_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc, const YYLTYPE *opening_loc, const YYLTYPE *closing_loc)
 {
-    YSTUB("rb_node_evstr_new");
-    return NULL;
+    /* #$ivar / #@ivar embed a variable with no braces; the opening token is
+     * the lone `#`. Everything else is #{...} embedded statements. */
+    if (opening_loc->end - opening_loc->beg == 1 && nd_body != NULL &&
+        (PM_NODE_TYPE_P(nd_body, PM_INSTANCE_VARIABLE_READ_NODE) ||
+         PM_NODE_TYPE_P(nd_body, PM_GLOBAL_VARIABLE_READ_NODE) ||
+         PM_NODE_TYPE_P(nd_body, PM_CLASS_VARIABLE_READ_NODE) ||
+         PM_NODE_TYPE_P(nd_body, PM_BACK_REFERENCE_READ_NODE) ||
+         PM_NODE_TYPE_P(nd_body, PM_NUMBERED_REFERENCE_READ_NODE))) {
+        return (rb_node_evstr_t *) pm_embedded_variable_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+            pm_yloc(opening_loc), nd_body);
+    }
+
+    pm_statements_node_t *statements = pm_ystatements_opt(p, nd_body);
+    /* A lone expression in an interpolation is not a line start (the wrap
+     * marks it as one); with multiple statements they all are, as usual. */
+    if (statements != NULL && statements->body.size == 1) {
+        statements->body.nodes[0]->flags &= (pm_node_flags_t) ~PM_NODE_FLAG_NEWLINE;
+    }
+    return (rb_node_evstr_t *) pm_embedded_statements_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_yloc(opening_loc), statements, pm_yloc(closing_loc));
 }
 
 static rb_node_regx_t *
@@ -11344,7 +11410,35 @@ literal_concat(struct parser_params *p, NODE *head, NODE *tail, const YYLTYPE *l
 {
     if (head == NULL) return tail;
     if (tail == NULL) return head;
-    YSTUB("literal_concat");
+
+    bool head_str = PM_NODE_TYPE_P(head, PM_STRING_NODE);
+    bool head_istr = PM_NODE_TYPE_P(head, PM_INTERPOLATED_STRING_NODE);
+    bool tail_str = PM_NODE_TYPE_P(tail, PM_STRING_NODE);
+    bool tail_embedded = PM_NODE_TYPE_P(tail, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(tail, PM_EMBEDDED_VARIABLE_NODE);
+
+    if (!head_istr && !head_str) {
+        if (PM_NODE_TYPE_P(head, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(head, PM_EMBEDDED_VARIABLE_NODE)) {
+            head = pm_yistr(p, head);
+            head_istr = true;
+            head_str = false;
+        }
+        else {
+            YSTUB("literal_concat");
+            return head;
+        }
+    }
+
+    if (!tail_str && !tail_embedded) {
+        YSTUB("literal_concat");
+        return head;
+    }
+
+    if (head_str) head = pm_yistr(p, head);
+
+    pm_interpolated_string_node_t *istr = (pm_interpolated_string_node_t *) head;
+    pm_node_list_append(p->pm->arena, &istr->parts, pm_yistr_part(tail));
+    uint32_t end = tail->location.start + tail->location.length;
+    istr->base.location.length = end - istr->base.location.start;
     return head;
 }
 
@@ -11371,7 +11465,10 @@ str2regx(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc, c
 static NODE *
 evstr2dstr(struct parser_params *p, NODE *node)
 {
-    if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) return node;
+    if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE) || PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) return node;
+    if (PM_NODE_TYPE_P(node, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(node, PM_EMBEDDED_VARIABLE_NODE)) {
+        return pm_yistr(p, node);
+    }
     YSTUB("evstr2dstr");
     return node;
 }
@@ -11379,8 +11476,18 @@ evstr2dstr(struct parser_params *p, NODE *node)
 static NODE *
 new_evstr(struct parser_params *p, NODE *node, const YYLTYPE *loc, const YYLTYPE *opening_loc, const YYLTYPE *closing_loc)
 {
-    YSTUB("new_evstr");
-    return NULL;
+    if (node) {
+        switch (PM_NODE_TYPE(node)) {
+          case PM_EMBEDDED_STATEMENTS_NODE:
+          case PM_EMBEDDED_VARIABLE_NODE:
+            return node;
+          default:
+            /* CRuby flattens string bodies here as a compile-time
+             * optimization; prism keeps the embedding. */
+            break;
+        }
+    }
+    return NEW_EVSTR(node, loc, opening_loc, closing_loc);
 }
 
 static NODE *
