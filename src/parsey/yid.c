@@ -104,7 +104,18 @@ pm_yid_type_for(const uint8_t *name, size_t length, const pm_encoding_t *encodin
 
 pm_yid_t
 pm_yid_intern(pm_arena_t *arena, pm_constant_pool_t *pool, const uint8_t *name, size_t length, const pm_encoding_t *encoding) {
-    pm_constant_id_t constant_id = pm_constant_pool_insert_constant(arena, pool, name, length);
+    /* The pool stores pointers, not copies, and interned names have to outlive
+     * whatever scratch buffer they arrive in (usually the lexer's tokenbuf).
+     * Names already in the pool are found without copying; new ones move into
+     * the arena first. */
+    pm_constant_id_t constant_id = pm_constant_pool_find(pool, name, length);
+
+    if (constant_id == PM_CONSTANT_ID_UNSET) {
+        uint8_t *stable = (uint8_t *) pm_arena_alloc(arena, length, 1);
+        memcpy(stable, name, length);
+        constant_id = pm_constant_pool_insert_constant(arena, pool, stable, length);
+    }
+
     if (constant_id == PM_CONSTANT_ID_UNSET) return PM_YID_NULL;
 
     pm_yid_t serial = (pm_yid_t) constant_id + PM_YID_DYNAMIC_SERIAL_BASE;

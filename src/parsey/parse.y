@@ -1935,14 +1935,31 @@ static int looking_at_eol_p(struct parser_params *p);
 static NODE *
 get_nd_value(struct parser_params *p, NODE *node)
 {
-    YSTUB("get_nd_value");
-    return NULL;
+    switch (PM_NODE_TYPE(node)) {
+      case PM_LOCAL_VARIABLE_WRITE_NODE: return ((pm_local_variable_write_node_t *) node)->value;
+      case PM_GLOBAL_VARIABLE_WRITE_NODE: return ((pm_global_variable_write_node_t *) node)->value;
+      case PM_INSTANCE_VARIABLE_WRITE_NODE: return ((pm_instance_variable_write_node_t *) node)->value;
+      case PM_CLASS_VARIABLE_WRITE_NODE: return ((pm_class_variable_write_node_t *) node)->value;
+      case PM_CONSTANT_WRITE_NODE: return ((pm_constant_write_node_t *) node)->value;
+      default:
+        YSTUB("get_nd_value");
+        return NULL;
+    }
 }
 
 static void
 set_nd_value(struct parser_params *p, NODE *node, NODE *rhs)
 {
-    YSTUB("set_nd_value");
+    switch (PM_NODE_TYPE(node)) {
+      case PM_LOCAL_VARIABLE_WRITE_NODE: ((pm_local_variable_write_node_t *) node)->value = rhs; break;
+      case PM_GLOBAL_VARIABLE_WRITE_NODE: ((pm_global_variable_write_node_t *) node)->value = rhs; break;
+      case PM_INSTANCE_VARIABLE_WRITE_NODE: ((pm_instance_variable_write_node_t *) node)->value = rhs; break;
+      case PM_CLASS_VARIABLE_WRITE_NODE: ((pm_class_variable_write_node_t *) node)->value = rhs; break;
+      case PM_CONSTANT_WRITE_NODE: ((pm_constant_write_node_t *) node)->value = rhs; break;
+      default:
+        YSTUB("set_nd_value");
+        break;
+    }
 }
 
 static ID
@@ -9569,6 +9586,27 @@ string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *openin
     return node;
 }
 
+/* The constant pool id for an ID's name, in the fork's usual pools. */
+#define YID2CONST(id) pm_yid_to_constant(&p->pm->metadata_arena, &p->pm->constant_pool, (id))
+
+/*
+ * The depth of a block-local variable: how many enclosing block scopes up its
+ * declaration lives, which is what prism's read/write nodes carry and CRuby's
+ * nodes recompute at compile time.
+ */
+static uint32_t
+pm_ydvar_depth(struct parser_params *p, ID id)
+{
+    uint32_t depth = 0;
+
+    for (struct vtable *vars = p->lvtbl->vars; vars != NULL && !DVARS_TERMINAL_P(vars); vars = vars->prev) {
+        if (vtable_included(vars, id)) return depth;
+        depth++;
+    }
+
+    return 0;
+}
+
 /* Mirror of prism.c's pm_integer_arena_move (static there): a parsed integer
  * that spilled to the heap moves into the arena the node lives in. */
 static void
@@ -9858,29 +9896,25 @@ rb_node_dot3_new(struct parser_params *p, NODE *nd_beg, NODE *nd_end, const YYLT
 static rb_node_self_t *
 rb_node_self_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_self_new");
-    return NULL;
+    return (rb_node_self_t *) pm_self_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc));
 }
 
 static rb_node_nil_t *
 rb_node_nil_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_nil_new");
-    return NULL;
+    return (rb_node_nil_t *) pm_nil_node_new(p->pm->arena, ++p->pm->node_id, PM_NODE_FLAG_STATIC_LITERAL, pm_yloc(loc));
 }
 
 static rb_node_true_t *
 rb_node_true_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_true_new");
-    return NULL;
+    return (rb_node_true_t *) pm_true_node_new(p->pm->arena, ++p->pm->node_id, PM_NODE_FLAG_STATIC_LITERAL, pm_yloc(loc));
 }
 
 static rb_node_false_t *
 rb_node_false_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_false_new");
-    return NULL;
+    return (rb_node_false_t *) pm_false_node_new(p->pm->arena, ++p->pm->node_id, PM_NODE_FLAG_STATIC_LITERAL, pm_yloc(loc));
 }
 
 static rb_node_super_t *
@@ -9950,36 +9984,46 @@ rb_node_masgn_new(struct parser_params *p, NODE *nd_head, NODE *nd_args, const Y
 static rb_node_gasgn_t *
 rb_node_gasgn_new(struct parser_params *p, ID nd_vid, NODE *nd_value, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_gasgn_new");
-    return NULL;
+    pm_location_t name_loc = pm_yloc(loc);
+    return (NODE *) pm_global_variable_write_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, name_loc,
+        YID2CONST(nd_vid), name_loc, nd_value, (pm_location_t) { 0 });
 }
 
 static rb_node_lasgn_t *
 rb_node_lasgn_new(struct parser_params *p, ID nd_vid, NODE *nd_value, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_lasgn_new");
-    return NULL;
+    pm_location_t name_loc = pm_yloc(loc);
+    return (NODE *) pm_local_variable_write_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, name_loc,
+        YID2CONST(nd_vid), 0, name_loc, nd_value, (pm_location_t) { 0 });
 }
 
 static rb_node_dasgn_t *
 rb_node_dasgn_new(struct parser_params *p, ID nd_vid, NODE *nd_value, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_dasgn_new");
-    return NULL;
+    pm_location_t name_loc = pm_yloc(loc);
+    return (NODE *) pm_local_variable_write_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, name_loc,
+        YID2CONST(nd_vid), pm_ydvar_depth(p, nd_vid), name_loc, nd_value, (pm_location_t) { 0 });
 }
 
 static rb_node_iasgn_t *
 rb_node_iasgn_new(struct parser_params *p, ID nd_vid, NODE *nd_value, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_iasgn_new");
-    return NULL;
+    pm_location_t name_loc = pm_yloc(loc);
+    return (NODE *) pm_instance_variable_write_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, name_loc,
+        YID2CONST(nd_vid), name_loc, nd_value, (pm_location_t) { 0 });
 }
 
 static rb_node_cvasgn_t *
 rb_node_cvasgn_new(struct parser_params *p, ID nd_vid, NODE *nd_value, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_cvasgn_new");
-    return NULL;
+    pm_location_t name_loc = pm_yloc(loc);
+    return (NODE *) pm_class_variable_write_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, name_loc,
+        YID2CONST(nd_vid), name_loc, nd_value, (pm_location_t) { 0 });
 }
 
 static rb_node_op_asgn1_t *
@@ -10013,57 +10057,52 @@ rb_node_op_asgn_and_new(struct parser_params *p, NODE *nd_head, NODE *nd_value, 
 static rb_node_gvar_t *
 rb_node_gvar_new(struct parser_params *p, ID nd_vid, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_gvar_new");
-    return NULL;
+    return (rb_node_gvar_t *) pm_global_variable_read_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), YID2CONST(nd_vid));
 }
 
 static rb_node_lvar_t *
 rb_node_lvar_new(struct parser_params *p, ID nd_vid, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_lvar_new");
-    return NULL;
+    return (rb_node_lvar_t *) pm_local_variable_read_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), YID2CONST(nd_vid), 0);
 }
 
 static rb_node_dvar_t *
 rb_node_dvar_new(struct parser_params *p, ID nd_vid, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_dvar_new");
-    return NULL;
+    return (rb_node_dvar_t *) pm_local_variable_read_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), YID2CONST(nd_vid), pm_ydvar_depth(p, nd_vid));
 }
 
 static rb_node_ivar_t *
 rb_node_ivar_new(struct parser_params *p, ID nd_vid, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_ivar_new");
-    return NULL;
+    return (rb_node_ivar_t *) pm_instance_variable_read_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), YID2CONST(nd_vid));
 }
 
 static rb_node_const_t *
 rb_node_const_new(struct parser_params *p, ID nd_vid, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_const_new");
-    return NULL;
+    return (rb_node_const_t *) pm_constant_read_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), YID2CONST(nd_vid));
 }
 
 static rb_node_cvar_t *
 rb_node_cvar_new(struct parser_params *p, ID nd_vid, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_cvar_new");
-    return NULL;
+    return (rb_node_cvar_t *) pm_class_variable_read_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), YID2CONST(nd_vid));
 }
 
 static rb_node_nth_ref_t *
 rb_node_nth_ref_new(struct parser_params *p, long nd_nth, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_nth_ref_new");
-    return NULL;
+    return (rb_node_nth_ref_t *) pm_numbered_reference_read_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), (uint32_t) nd_nth);
 }
 
 static rb_node_back_ref_t *
 rb_node_back_ref_new(struct parser_params *p, long nd_nth, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_back_ref_new");
-    return NULL;
+    char name[3] = { '$', (char) nd_nth, '\0' };
+    return (rb_node_back_ref_t *) pm_back_reference_read_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        pm_constant_pool_insert_constant(&p->pm->metadata_arena, &p->pm->constant_pool, (const uint8_t *) name, 2));
 }
 
 static rb_node_integer_t *
@@ -10205,8 +10244,12 @@ rb_node_qcall_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd_ar
 static rb_node_vcall_t *
 rb_node_vcall_new(struct parser_params *p, ID nd_mid, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_vcall_new");
-    return NULL;
+    pm_location_t location = pm_yloc(loc);
+    return (rb_node_vcall_t *) pm_call_node_new(
+        p->pm->arena, ++p->pm->node_id,
+        PM_CALL_NODE_FLAGS_VARIABLE_CALL | PM_CALL_NODE_FLAGS_IGNORE_VISIBILITY,
+        location, NULL, (pm_location_t) { 0 }, YID2CONST(nd_mid), location,
+        (pm_location_t) { 0 }, NULL, (pm_location_t) { 0 }, (pm_location_t) { 0 }, NULL);
 }
 
 static rb_node_once_t *
@@ -10352,29 +10395,37 @@ rb_node_fndptn_new(struct parser_params *p, NODE *pre_rest_arg, NODE *args, NODE
 static rb_node_line_t *
 rb_node_line_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_line_new");
-    return NULL;
+    return (rb_node_line_t *) pm_source_line_node_new(p->pm->arena, ++p->pm->node_id, PM_NODE_FLAG_STATIC_LITERAL, pm_yloc(loc));
 }
 
 static rb_node_file_t *
 rb_node_file_new(struct parser_params *p, VALUE str, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_file_new");
-    return NULL;
+    pm_string_t filepath;
+    pm_string_constant_init(&filepath, (const char *) pm_string_source(&p->pm->filepath), pm_string_length(&p->pm->filepath));
+    return (rb_node_file_t *) pm_source_file_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), filepath);
 }
 
 static rb_node_encoding_t *
 rb_node_encoding_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_encoding_new");
-    return NULL;
+    return (rb_node_encoding_t *) pm_source_encoding_node_new(p->pm->arena, ++p->pm->node_id, PM_NODE_FLAG_STATIC_LITERAL, pm_yloc(loc));
 }
 
 static rb_node_cdecl_t *
 rb_node_cdecl_new(struct parser_params *p, ID nd_vid, NODE *nd_value, NODE *nd_else, enum rb_parser_shareability shareability, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_cdecl_new");
-    return NULL;
+    if (nd_else != 0) {
+        /* Scoped constant assignment (A::B = ...) arrives with the constant
+         * path port. */
+        YSTUB("rb_node_cdecl_new");
+        return NULL;
+    }
+    (void) shareability;
+    pm_location_t name_loc = pm_yloc(loc);
+    return (NODE *) pm_constant_write_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, name_loc,
+        YID2CONST(nd_vid), name_loc, nd_value, (pm_location_t) { 0 });
 }
 
 static rb_node_op_cdecl_t *
@@ -10387,8 +10438,7 @@ rb_node_op_cdecl_new(struct parser_params *p, NODE *nd_head, NODE *nd_value, ID 
 static rb_node_error_t *
 rb_node_error_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_error_new");
-    return NULL;
+    return (rb_node_error_t *) pm_error_recovery_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), NULL);
 }
 
 static rb_node_break_t *
@@ -10659,8 +10709,72 @@ it_used_p(struct parser_params *p)
 static NODE*
 gettable(struct parser_params *p, ID id, const YYLTYPE *loc)
 {
-    YSTUB("gettable");
-    return NULL;
+    ID *vidp = NULL;
+    NODE *node;
+    switch (id) {
+      case keyword_self:
+        return NEW_SELF(loc);
+      case keyword_nil:
+        return NEW_NIL(loc);
+      case keyword_true:
+        return NEW_TRUE(loc);
+      case keyword_false:
+        return NEW_FALSE(loc);
+      case keyword__FILE__:
+        return NEW_FILE(0, loc);
+      case keyword__LINE__:
+        return NEW_LINE(loc);
+      case keyword__ENCODING__:
+        return NEW_ENCODING(loc);
+    }
+    switch (id_type(id)) {
+      case ID_LOCAL:
+        if (dyna_in_block(p) && dvar_defined_ref(p, id, &vidp)) {
+            if (NUMPARAM_ID_P(id) && (numparam_nested_p(p) || it_used_p(p))) return 0;
+            if (vidp) *vidp |= LVAR_USED;
+            node = NEW_DVAR(id, loc);
+            return node;
+        }
+        if (local_id_ref(p, id, &vidp)) {
+            if (vidp) *vidp |= LVAR_USED;
+            node = NEW_LVAR(id, loc);
+            return node;
+        }
+        if (dyna_in_block(p) && NUMPARAM_ID_P(id) &&
+            parser_numbered_param(p, NUMPARAM_ID_TO_IDX(id))) {
+            if (numparam_nested_p(p) || it_used_p(p)) return 0;
+            node = NEW_DVAR(id, loc);
+            struct local_vars *local = p->lvtbl;
+            if (!local->numparam.current) local->numparam.current = node;
+            return node;
+        }
+        /* method call without arguments */
+        if (dyna_in_block(p) && id == idIt && !(DVARS_TERMINAL_P(p->lvtbl->args) || DVARS_TERMINAL_P(p->lvtbl->args->prev))) {
+            if (numparam_used_p(p)) return 0;
+            if (p->max_numparam == ORDINAL_PARAM) {
+                compile_error(p, "ordinary parameter is defined");
+                return 0;
+            }
+            if (!p->it_id) {
+                p->it_id = idItImplicit;
+                vtable_add(p->lvtbl->args, p->it_id);
+            }
+            NODE *dvar = NEW_DVAR(p->it_id, loc);
+            if (!p->lvtbl->it) p->lvtbl->it = dvar;
+            return dvar;
+        }
+        return NEW_VCALL(id, loc);
+      case ID_GLOBAL:
+        return NEW_GVAR(id, loc);
+      case ID_INSTANCE:
+        return NEW_IVAR(id, loc);
+      case ID_CONST:
+        return NEW_CONST(id, loc);
+      case ID_CLASS:
+        return NEW_CVAR(id, loc);
+    }
+    compile_error(p, "identifier is not valid to get");
+    return 0;
 }
 
 static rb_node_opt_arg_t *
@@ -10777,15 +10891,77 @@ append_bitstack_value(struct parser_params *p, stack_type stack, VALUE mesg)
 static int
 assignable0(struct parser_params *p, ID id, const char **err)
 {
-    YSTUB("assignable0");
-    return 0;
+    if (!id) return -1;
+    switch (id) {
+      case keyword_self:
+        *err = "Can't change the value of self";
+        return -1;
+      case keyword_nil:
+        *err = "Can't assign to nil";
+        return -1;
+      case keyword_true:
+        *err = "Can't assign to true";
+        return -1;
+      case keyword_false:
+        *err = "Can't assign to false";
+        return -1;
+      case keyword__FILE__:
+        *err = "Can't assign to __FILE__";
+        return -1;
+      case keyword__LINE__:
+        *err = "Can't assign to __LINE__";
+        return -1;
+      case keyword__ENCODING__:
+        *err = "Can't assign to __ENCODING__";
+        return -1;
+    }
+    switch (id_type(id)) {
+      case ID_LOCAL:
+        if (dyna_in_block(p)) {
+            if (p->max_numparam > NO_PARAM && NUMPARAM_ID_P(id)) {
+                compile_error(p, "Can't assign to numbered parameter _%d",
+                              NUMPARAM_ID_TO_IDX(id));
+                return -1;
+            }
+            if (dvar_curr(p, id)) return NODE_DASGN;
+            if (dvar_defined(p, id)) return NODE_DASGN;
+            if (local_id(p, id)) return NODE_LASGN;
+            dyna_var(p, id);
+            return NODE_DASGN;
+        }
+        else {
+            if (!local_id(p, id)) local_var(p, id);
+            return NODE_LASGN;
+        }
+        break;
+      case ID_GLOBAL: return NODE_GASGN;
+      case ID_INSTANCE: return NODE_IASGN;
+      case ID_CONST:
+        if (!p->ctxt.in_def) return NODE_CDECL;
+        *err = "dynamic constant assignment";
+        return -1;
+      case ID_CLASS: return NODE_CVASGN;
+      default:
+        compile_error(p, "identifier is not valid to set");
+    }
+    return -1;
 }
 
 static NODE*
 assignable(struct parser_params *p, ID id, NODE *val, const YYLTYPE *loc)
 {
-    YSTUB("assignable");
-    return NULL;
+    const char *err = 0;
+    int node_type = assignable0(p, id, &err);
+    switch (node_type) {
+      case NODE_DASGN: return NEW_DASGN(id, val, loc);
+      case NODE_LASGN: return NEW_LASGN(id, val, loc);
+      case NODE_GASGN: return NEW_GASGN(id, val, loc);
+      case NODE_IASGN: return NEW_IASGN(id, val, loc);
+      case NODE_CDECL: return NEW_CDECL(id, val, 0, p->ctxt.shareable_constant_value, loc);
+      case NODE_CVASGN: return NEW_CVASGN(id, val, loc);
+    }
+    if (err) yyerror1(loc, err);
+    return NEW_ERROR(loc);
 }
 
 static int
@@ -10925,8 +11101,52 @@ static int is_static_content(NODE *node);
 static NODE *
 node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ctxt, const YYLTYPE *loc)
 {
-    YSTUB("node_assign");
-    return NULL;
+    if (!lhs) return 0;
+    (void) ctxt;
+
+    /*
+     * The operator's own location: CRuby's nodes never store it, so the rules
+     * do not pass it down. It is recoverable exactly: the first `=` after the
+     * target is necessarily the operator, since a newline or comment before
+     * it would have ended the statement.
+     */
+    pm_location_t operator_loc = { 0 };
+    if (rhs != NULL) {
+        uint32_t scan = lhs->location.start + lhs->location.length;
+        while (scan < rhs->location.start && p->pm->start[scan] != '=') scan++;
+        if (scan < rhs->location.start) operator_loc = (pm_location_t) { scan, 1 };
+    }
+
+    switch (PM_NODE_TYPE(lhs)) {
+      case PM_LOCAL_VARIABLE_WRITE_NODE:
+        ((pm_local_variable_write_node_t *) lhs)->operator_loc = operator_loc;
+        goto assign;
+      case PM_GLOBAL_VARIABLE_WRITE_NODE:
+        ((pm_global_variable_write_node_t *) lhs)->operator_loc = operator_loc;
+        goto assign;
+      case PM_INSTANCE_VARIABLE_WRITE_NODE:
+        ((pm_instance_variable_write_node_t *) lhs)->operator_loc = operator_loc;
+        goto assign;
+      case PM_CLASS_VARIABLE_WRITE_NODE:
+        ((pm_class_variable_write_node_t *) lhs)->operator_loc = operator_loc;
+        goto assign;
+      case PM_CONSTANT_WRITE_NODE:
+        ((pm_constant_write_node_t *) lhs)->operator_loc = operator_loc;
+        goto assign;
+      assign:
+        set_nd_value(p, lhs, rhs);
+        lhs->location = pm_yloc(loc);
+        break;
+
+      case PM_ERROR_RECOVERY_NODE:
+        break;
+
+      default:
+        YSTUB("node_assign");
+        break;
+    }
+
+    return lhs;
 }
 
 static NODE *
