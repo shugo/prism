@@ -5468,7 +5468,7 @@ f_arg_asgn	: f_norm_arg
 
 f_arg_item	: f_arg_asgn
                     {
-                        $$ = NEW_ARGS_AUX($1, 1, &NULL_LOC);
+                        $$ = NEW_ARGS_AUX($1, 1, &@1);
                     }
                 | tLPAREN f_margs rparen
                     {
@@ -5492,8 +5492,18 @@ f_arg		: f_arg_item
                 | f_arg ',' f_arg_item
                     {
                         $$ = $1;
-                        YSTUB("grammar"); /* PORTME: $$->nd_plen++; */
-                        YSTUB("grammar"); /* PORTME: $$->nd_next = block_append(p, $$->nd_next, $3->nd_next); */
+                        if ($$ != NULL && $3 != NULL && PM_NODE_TYPE_P((NODE *) $$, PM_ARRAY_NODE) && PM_NODE_TYPE_P((NODE *) $3, PM_ARRAY_NODE)) {
+                            pm_array_node_t *carrier = (pm_array_node_t *) $$;
+                            pm_array_node_t *item = (pm_array_node_t *) $3;
+                            for (size_t i = 0; i < item->elements.size; i++) {
+                                pm_node_list_append(p->pm->arena, &carrier->elements, item->elements.nodes[i]);
+                            }
+                            uint32_t end = item->base.location.start + item->base.location.length;
+                            carrier->base.location.length = end - carrier->base.location.start;
+                        }
+                        else {
+                            YSTUB("f_arg append");
+                        }
                         rb_discard_node(p, (NODE *)$3);
                     }
                 ;
@@ -9811,7 +9821,12 @@ pm_ydef_finish(struct parser_params *p, NODE *node, NODE *args, NODE *body, cons
     def->locals = pm_ylocals(p);
 
     if (args != NULL) {
-        YSTUB("pm_ydef_finish parameters"); /* PORTME: the parameter builders */
+        if (PM_NODE_TYPE_P(args, PM_PARAMETERS_NODE)) {
+            def->parameters = (pm_parameters_node_t *) args;
+        }
+        else {
+            YSTUB("pm_ydef_finish parameters");
+        }
     }
 
     if (p->yparens.set) {
@@ -10650,8 +10665,16 @@ rb_node_args_new(struct parser_params *p, const YYLTYPE *loc)
 static rb_node_args_aux_t *
 rb_node_args_aux_new(struct parser_params *p, ID nd_pid, int nd_plen, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_args_aux_new");
-    return NULL;
+    pm_location_t location = pm_yloc(loc);
+    pm_node_t *required = (pm_node_t *) pm_required_parameter_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, location, YID2CONST(nd_pid));
+
+    pm_node_list_t elements = { 0 };
+    pm_node_list_append(p->pm->arena, &elements, required);
+    (void) nd_plen;
+    return (rb_node_args_aux_t *) pm_array_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, location, elements,
+        (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static rb_node_opt_arg_t *
@@ -11778,7 +11801,18 @@ args_info_empty_p(struct rb_args_info *args)
 static rb_node_args_t *
 new_args(struct parser_params *p, rb_node_args_aux_t *pre_args, rb_node_opt_arg_t *opt_args, ID rest_arg, rb_node_args_aux_t *post_args, rb_node_args_t *tail, const YYLTYPE *loc)
 {
-    if (pre_args == NULL && opt_args == NULL && rest_arg == 0 && post_args == NULL && tail == NULL) return NULL;
+    if (opt_args == NULL && rest_arg == 0 && post_args == NULL && tail == NULL) {
+        if (pre_args == NULL) return NULL;
+
+        if (PM_NODE_TYPE_P((NODE *) pre_args, PM_ARRAY_NODE)) {
+            pm_array_node_t *carrier = (pm_array_node_t *) pre_args;
+            return (rb_node_args_t *) pm_parameters_node_new(
+                p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+                carrier->elements, (pm_node_list_t) { 0 }, NULL,
+                (pm_node_list_t) { 0 }, (pm_node_list_t) { 0 }, NULL, NULL);
+        }
+    }
+
     YSTUB("new_args");
     return NULL;
 }
