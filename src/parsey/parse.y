@@ -356,6 +356,8 @@ typedef struct rb_strterm_literal_struct {
     int func;	    /* STR_FUNC_* (e.g., STR_FUNC_ESCAPE and STR_FUNC_EXPAND) */
     int paren;	    /* '(' of `%q(...)` */
     int term;	    /* ')' of `%q(...)` */
+    uint32_t yopener_beg;	/* fork: heredoc opener span, reported as the */
+    uint32_t yopener_end;	/* deferred END token's location */
 } rb_strterm_literal_t;
 
 typedef struct rb_strterm_heredoc_struct {
@@ -365,6 +367,7 @@ typedef struct rb_strterm_heredoc_struct {
     unsigned length;	/* the length of END in `<<"END"` */
     uint8_t quote;
     uint8_t func;
+    uint32_t ycontent_beg;	/* fork: offset of the first body line */
 } rb_strterm_heredoc_t;
 
 #define HERETERM_LENGTH_MAX UINT_MAX
@@ -955,14 +958,13 @@ struct parser_params {
     stack_type cond_stack;
     stack_type cmdarg_stack;
 
-    /* Inert: nothing sets delayed.token since the token event plumbing was
-     * dropped, so the guards reading it are permanently false. */
+    /* String content carried across an interpolation or an interleaved
+     * heredoc body: the accumulated bytes plus the byte-offset span, which
+     * is what the content token's location must report. */
     struct {
         rb_parser_string_t *token;
-        int beg_line;
-        int beg_col;
-        int end_line;
-        int end_col;
+        uint32_t beg;
+        uint32_t end;
     } delayed;
 
     /* fork: the parenthesis locations of the paren_args just reduced, consumed
@@ -991,6 +993,33 @@ struct parser_params {
     /* fork: a &block argument parked by arg_blk_pass for the call about to
      * consume its arguments; prism hangs it on the call, not the list. */
     NODE *yblock_pass;
+
+    /* fork: a heredoc opener span waiting to become the deferred END
+     * token's location (see pm_yheredoc_end_capture). */
+    YYLTYPE yheredoc_opener;
+
+    /* fork: the true span of a final content chunk carried across an
+     * interpolation, for the node the lexer builds after restoring. */
+    YYLTYPE yheredoc_content;
+
+    /* fork: the spans a heredoc's reduction needs but whose tokens the
+     * lexer reports at the opener (where lexing resumes): the body and the
+     * terminator line, captured when the terminator is recognized. */
+    struct {
+        uint32_t content_beg;
+        uint32_t closing_beg;
+        uint32_t closing_end;
+        unsigned int set: 1;
+    } yheredoc;
+
+    /* fork: the parens of a def's parameter list (f_paren_args), distinct
+     * from call-argument parens so body calls cannot clobber them; nested
+     * defs save/restore it through def_temp. */
+    struct {
+        YYLTYPE opening;
+        YYLTYPE closing;
+        unsigned int set: 1;
+    } yfparens;
     int tokidx;
     int toksiz;
     int heredoc_end;
@@ -1417,6 +1446,7 @@ static NODE *pm_ybegin_keywords(struct parser_params *p, NODE *node, const YYLTY
 static NODE *pm_yparentheses(struct parser_params *p, NODE *body, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static void pm_ydef_head(struct parser_params *p, NODE *node, const YYLTYPE *def_loc, const YYLTYPE *operator_loc, const YYLTYPE *name_loc);
 static void pm_ydef_parens(struct parser_params *p, NODE *node);
+static NODE *pm_ydef_endless(struct parser_params *p, NODE *node, NODE *args, NODE *body, const YYLTYPE *eq_loc, const YYLTYPE *loc);
 static NODE *pm_ydef_finish(struct parser_params *p, NODE *node, NODE *args, NODE *body, const YYLTYPE *loc, const YYLTYPE *end_loc);
 static NODE *pm_yassoc(struct parser_params *p, NODE *key, NODE *value, const YYLTYPE *operator_loc, const YYLTYPE *loc);
 static NODE *pm_yassoc_splat(struct parser_params *p, NODE *value, const YYLTYPE *operator_loc, const YYLTYPE *loc);
@@ -1611,6 +1641,11 @@ struct RNode_DEF_TEMP {
         int max_numparam;
         NODE *numparam_save;
         struct lex_context ctxt;
+        struct {
+            YYLTYPE opening;
+            YYLTYPE closing;
+            unsigned int set: 1;
+        } yfparens;
     } save;
 };
 
@@ -1911,6 +1946,9 @@ restore_defun(struct parser_params *p, rb_node_def_temp_t *temp)
     p->ctxt.in_rescue = ctxt.in_rescue;
     p->max_numparam = temp->save.max_numparam;
     numparam_pop(p, temp->save.numparam_save);
+    p->yfparens.opening = temp->save.yfparens.opening;
+    p->yfparens.closing = temp->save.yfparens.closing;
+    p->yfparens.set = temp->save.yfparens.set;
     clear_block_exit(p, true);
 }
 
@@ -2478,20 +2516,20 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
                 ;
 
 %rule def_endless_method(bodystmt) <node>
-                : defn_head[head] f_opt_paren_args[args] '=' bodystmt
+                : defn_head[head] f_opt_paren_args[args] '='[eq] bodystmt
                     {
                         endless_method_name(p, $head->nd_mid, &@head);
+                        pm_ydef_parens(p, (NODE *) $head->nd_def);
                         restore_defun(p, $head);
-                        $$ = 0; YSTUB("endless method definition");
-                        $bodystmt = new_scope_body(p, $args, $bodystmt, $$, &@$);
+                        $$ = pm_ydef_endless(p, (NODE *) $head->nd_def, (NODE *) $args, $bodystmt, &@eq, &@$);
                         local_pop(p);
                     }
-                | defs_head[head] f_opt_paren_args[args] '=' bodystmt
+                | defs_head[head] f_opt_paren_args[args] '='[eq] bodystmt
                     {
                         endless_method_name(p, $head->nd_mid, &@head);
+                        pm_ydef_parens(p, (NODE *) $head->nd_def);
                         restore_defun(p, $head);
-                        $$ = 0; YSTUB("endless singleton method definition");
-                        $bodystmt = new_scope_body(p, $args, $bodystmt, $$, &@$);
+                        $$ = pm_ydef_endless(p, (NODE *) $head->nd_def, (NODE *) $args, $bodystmt, &@eq, &@$);
                         local_pop(p);
                     }
                 ;
@@ -5379,7 +5417,9 @@ f_empty_arg	: /* none */
 f_paren_args	: '(' f_args rparen
                     {
                         $$ = $2;
-                        pm_yparens_set(p, &@1, &@3);
+                        p->yfparens.opening = @1;
+                        p->yfparens.closing = @3;
+                        p->yfparens.set = 1;
                         SET_LEX_STATE(EXPR_BEG);
                         p->command_start = TRUE;
                         p->ctxt.in_argdef = 0;
@@ -5877,7 +5917,25 @@ do { \
 
 #define literal_flush(p, ptr) ((p)->lex.ptok = (ptr))
 #define dispatch_scan_event(p, t) parser_dispatch_scan_event(p, t)
-#define dispatch_delayed_token(p, t) ((void) 0)
+#define dispatch_delayed_token(p, t) parser_dispatch_delayed_token(p, t)
+
+/*
+ * The location half of CRuby's delayed-token machinery: a content token whose
+ * bytes were accumulated before an interpolation (or across an interleaved
+ * heredoc body) reports the span recorded at accumulation time, not wherever
+ * the lexer happens to stand when the token is finally returned.
+ */
+static void
+parser_dispatch_delayed_token(struct parser_params *p, enum yytokentype t)
+{
+    (void) t;
+    if (!has_delayed_token(p)) return;
+
+    p->yylloc->beg = p->delayed.beg;
+    p->yylloc->end = p->delayed.end;
+    rb_parser_string_free(p, p->delayed.token);
+    p->delayed.token = NULL;
+}
 
 /*
  * The half of CRuby's parser_dispatch_scan_event that is not about ripper or
@@ -5893,8 +5951,31 @@ parser_dispatch_scan_event(struct parser_params *p, enum yytokentype t)
     RUBY_SET_YYLLOC(*p->yylloc);
     token_flush(p);
 }
-#define add_delayed_token(p, tok, end) ((void) 0)
-#define dispatch_heredoc_end(p) ((void) 0)
+#define add_delayed_token(p, tok, end) parser_add_delayed_token(p, tok, end)
+static void
+parser_add_delayed_token(struct parser_params *p, const char *tok, const char *end)
+{
+    if (tok < end) {
+        if (has_delayed_token(p)) {
+            /* a gap (an interleaved heredoc body) closes the previous span */
+            if (p->delayed.end != YOFF(tok)) {
+                dispatch_delayed_token(p, tSTRING_CONTENT);
+            }
+        }
+        if (!has_delayed_token(p)) {
+            p->delayed.token = rb_parser_string_new(p, 0, 0);
+            p->delayed.beg = YOFF(tok);
+        }
+        parser_str_cat(p->delayed.token, tok, (long) (end - tok));
+        p->delayed.end = YOFF(end);
+        p->lex.ptok = end;
+    }
+}
+/* fork: the heredoc terminator is recognized here, with the lexer still on
+ * the terminator line; capture the spans the reduction will need, since the
+ * END token itself is reported back at the opener where lexing resumes. */
+static void pm_yheredoc_end_capture(struct parser_params *p);
+#define dispatch_heredoc_end(p) pm_yheredoc_end_capture(p)
 
 
 static const char *
@@ -7073,8 +7154,7 @@ flush_string_content(struct parser_params *p, rb_encoding *enc, size_t back)
         ptrdiff_t len = p->lex.pcur - p->lex.ptok;
         if (len > 0) {
             rb_parser_enc_str_buf_cat(p, p->delayed.token, p->lex.ptok, len, enc);
-            p->delayed.end_line = p->ruby_sourceline;
-            p->delayed.end_col = rb_long2int(p->lex.pcur - p->lex.pbeg);
+            p->delayed.end = YOFF(p->lex.pcur);
         }
         dispatch_delayed_token(p, tSTRING_CONTENT);
         p->lex.ptok = p->lex.pcur;
@@ -7182,6 +7262,11 @@ parse_string(struct parser_params *p, rb_strterm_literal_t *quote)
     if (func & STR_FUNC_TERM) {
         if (func & STR_FUNC_QWORDS) nextc(p); /* delayed term */
         SET_LEX_STATE(EXPR_END);
+        if (quote->yopener_end != 0) {
+            /* a heredoc's deferred END reports at its opener */
+            p->yylloc->beg = quote->yopener_beg;
+            p->yylloc->end = quote->yopener_end;
+        }
         xfree(p->lex.strterm);
         p->lex.strterm = 0;
         return func & STR_FUNC_REGEXP ? tREGEXP_END : tSTRING_END;
@@ -7398,7 +7483,34 @@ dedent_string(struct parser_params *p, rb_parser_string_t *string, int width)
 static NODE *
 heredoc_dedent(struct parser_params *p, NODE *root)
 {
-    if (p->heredoc_indent <= 0) return root;
+    int indent = p->heredoc_indent;
+    if (indent <= 0 || root == NULL) return root;
+
+    if (PM_NODE_TYPE_P(root, PM_STRING_NODE)) {
+        pm_string_t *unescaped = &((pm_string_node_t *) root)->unescaped;
+        if (PM_NODE_FLAG_P(root, PM_NODE_FLAG_NEWLINE)) {
+            const char *bytes = (const char *) pm_string_source(unescaped);
+            size_t length = pm_string_length(unescaped);
+            int strip = dedent_string_column(bytes, (long) length, indent);
+            if (strip > 0) pm_string_constant_init(unescaped, bytes + strip, length - (size_t) strip);
+        }
+        return root;
+    }
+
+    if (PM_NODE_TYPE_P(root, PM_INTERPOLATED_STRING_NODE)) {
+        pm_node_list_t parts = ((pm_interpolated_string_node_t *) root)->parts;
+        for (size_t i = 0; i < parts.size; i++) {
+            pm_node_t *part = parts.nodes[i];
+            if (!PM_NODE_TYPE_P(part, PM_STRING_NODE) || !PM_NODE_FLAG_P(part, PM_NODE_FLAG_NEWLINE)) continue;
+            pm_string_t *unescaped = &((pm_string_node_t *) part)->unescaped;
+            const char *bytes = (const char *) pm_string_source(unescaped);
+            size_t length = pm_string_length(unescaped);
+            int strip = dedent_string_column(bytes, (long) length, indent);
+            if (strip > 0) pm_string_constant_init(unescaped, bytes + strip, length - (size_t) strip);
+        }
+        return root;
+    }
+
     YSTUB("heredoc_dedent");
     return root;
 }
@@ -7521,7 +7633,9 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
     len = here->length;
     indent = (func = here->func) & STR_FUNC_INDENT;
 
-    if ((c = nextc(p)) == -1) {
+    c = nextc(p);
+    if (here->ycontent_beg == 0) here->ycontent_beg = YOFF(p->lex.pbeg);
+    if (c == -1) {
       error:
         heredoc_restore(p, &p->lex.strterm->u.heredoc);
         compile_error(p, "can't find string \"%.*s\" anywhere before EOF",
@@ -7637,7 +7751,17 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
     heredoc_restore(p, &p->lex.strterm->u.heredoc);
     token_flush(p);
     p->lex.strterm = NEW_STRTERM(func | STR_FUNC_TERM, 0, 0);
+    p->lex.strterm->u.literal.yopener_beg = p->yheredoc_opener.beg;
+    p->lex.strterm->u.literal.yopener_end = p->yheredoc_opener.end;
+    p->yheredoc_opener.beg = p->yheredoc_opener.end = 0;
     set_yylval_str(str);
+    /* fork: a chunk carried across an interpolation keeps its true span */
+    if (p->yheredoc_content.end != 0 && yylval.node != NULL && PM_NODE_TYPE_P(yylval.node, PM_STRING_NODE)) {
+        pm_location_t span = { p->yheredoc_content.beg, p->yheredoc_content.end - p->yheredoc_content.beg };
+        yylval.node->location = span;
+        ((pm_string_node_t *) yylval.node)->content_loc = span;
+    }
+    p->yheredoc_content.beg = p->yheredoc_content.end = 0;
 
     if (bol) nd_set_fl_newline(yylval.node);
     return tSTRING_CONTENT;
@@ -9659,9 +9783,68 @@ pm_ystr_take(struct parser_params *p, rb_parser_string_t *str)
  * token is known; the constructor only sees the content. Called from the
  * string1 action, which is where CRuby re-locates the node too.
  */
+/* If the parked heredoc spans apply to this literal (its opener is <<),
+ * consume them: the node's own span is the opener, the content runs from the
+ * first body line to the terminator line, and the closing is the terminator
+ * line without its newline. */
+static bool
+pm_yheredoc_take(struct parser_params *p, const YYLTYPE *opening, pm_location_t *content_out, pm_location_t *closing_out)
+{
+    if (!p->yheredoc.set) return false;
+    if (p->pm->start[opening->beg] != '<' || p->pm->start[opening->beg + 1] != '<') return false;
+
+    *content_out = (pm_location_t) { p->yheredoc.content_beg, p->yheredoc.closing_beg - p->yheredoc.content_beg };
+    *closing_out = (pm_location_t) { p->yheredoc.closing_beg, p->yheredoc.closing_end - p->yheredoc.closing_beg };
+    p->yheredoc.set = 0;
+    return true;
+}
+
 static NODE *
 string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc)
 {
+    /* a heredoc: every span comes from the parked capture, and the per-line
+     * bookkeeping flag the lexer left on string parts comes back off */
+    {
+        pm_location_t heredoc_content, heredoc_closing;
+        if (pm_yheredoc_take(p, opening, &heredoc_content, &heredoc_closing)) {
+            pm_location_t opening_loc = pm_yloc(opening);
+
+            if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
+                if (node == NULL) {
+                    node = (NODE *) pm_string_node_new(
+                        p->pm->arena, ++p->pm->node_id, 0, opening_loc,
+                        (pm_location_t) { 0 }, heredoc_content, (pm_location_t) { 0 },
+                        PM_STRING_EMPTY);
+                }
+                pm_string_node_t *string = (pm_string_node_t *) node;
+                string->base.flags &= (pm_node_flags_t) ~PM_NODE_FLAG_NEWLINE;
+                string->base.location = opening_loc;
+                string->opening_loc = opening_loc;
+                string->content_loc = heredoc_content;
+                string->closing_loc = heredoc_closing;
+                return node;
+            }
+
+            if (PM_NODE_TYPE_P(node, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(node, PM_EMBEDDED_VARIABLE_NODE)) {
+                node = pm_yistr(p, node);
+            }
+            if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) {
+                pm_interpolated_string_node_t *istr = (pm_interpolated_string_node_t *) node;
+                istr->base.flags &= (pm_node_flags_t) ~PM_NODE_FLAG_NEWLINE;
+                istr->base.location = opening_loc;
+                istr->opening_loc = opening_loc;
+                istr->closing_loc = heredoc_closing;
+                for (size_t i = 0; i < istr->parts.size; i++) {
+                    istr->parts.nodes[i]->flags &= (pm_node_flags_t) ~PM_NODE_FLAG_NEWLINE;
+                }
+                return node;
+            }
+
+            YSTUB("string_literal_quotes heredoc");
+            return node;
+        }
+    }
+
     if (node == NULL) {
         /* Empty contents: the node carries a zero-width content location
          * between the quotes, as the hand-written parser produces. */
@@ -10447,16 +10630,52 @@ pm_ydef_finish(struct parser_params *p, NODE *node, NODE *args, NODE *body, cons
     return node;
 }
 
+/* Complete an endless method definition: the = and the single-expression
+ * body, which wraps in a StatementsNode without the statement newline flag. */
+static NODE *
+pm_ydef_endless(struct parser_params *p, NODE *node, NODE *args, NODE *body, const YYLTYPE *eq_loc, const YYLTYPE *loc)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_DEF_NODE)) {
+        YSTUB("pm_ydef_endless");
+        return node;
+    }
+
+    pm_def_node_t *def = (pm_def_node_t *) node;
+    def->base.location = pm_yloc(loc);
+    def->equal_loc = pm_yloc(eq_loc);
+
+    /* the body expression is not a statement, so no newline flag */
+    if (body != NULL) {
+        pm_node_list_t statements = { 0 };
+        pm_node_list_append(p->pm->arena, &statements, body);
+        def->body = (pm_node_t *) pm_statements_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, body->location, statements);
+    }
+
+    def->locals = pm_ylocals(p);
+
+    if (args != NULL) {
+        if (PM_NODE_TYPE_P(args, PM_PARAMETERS_NODE)) {
+            def->parameters = (pm_parameters_node_t *) args;
+        }
+        else {
+            YSTUB("pm_ydef_endless parameters");
+        }
+    }
+
+    return node;
+}
+
 /* Claim the parameter-list parens for a def right after f_arglist reduces:
  * by the time the def closes, calls in the body will have reused the slot. */
 static void
 pm_ydef_parens(struct parser_params *p, NODE *node)
 {
-    if (!p->yparens.set || node == NULL || !PM_NODE_TYPE_P(node, PM_DEF_NODE)) return;
+    if (!p->yfparens.set || node == NULL || !PM_NODE_TYPE_P(node, PM_DEF_NODE)) return;
     pm_def_node_t *def = (pm_def_node_t *) node;
-    def->lparen_loc = pm_yloc(&p->yparens.opening);
-    def->rparen_loc = pm_yloc(&p->yparens.closing);
-    p->yparens.set = 0;
+    def->lparen_loc = pm_yloc(&p->yfparens.opening);
+    def->rparen_loc = pm_yloc(&p->yfparens.closing);
+    p->yfparens.set = 0;
 }
 
 /* An else clause, built at the opt_else reduction, which is the last moment
@@ -11915,6 +12134,10 @@ def_head_save(struct parser_params *p, rb_node_def_temp_t *n)
 {
     n->save.numparam_save = numparam_push(p);
     n->save.max_numparam = p->max_numparam;
+    n->save.yfparens.opening = p->yfparens.opening;
+    n->save.yfparens.closing = p->yfparens.closing;
+    n->save.yfparens.set = p->yfparens.set;
+    p->yfparens.set = 0;
     return n;
 }
 
@@ -12553,12 +12776,28 @@ new_xstring(struct parser_params *p, NODE *node, const YYLTYPE *opening_loc, con
     pm_location_t opening = pm_yloc(opening_loc);
     pm_location_t closing = pm_yloc(closing_loc);
     pm_location_t content = { opening.start + opening.length, closing.start - (opening.start + opening.length) };
+    pm_location_t node_loc = pm_yloc(loc);
+
+    /* a <<`CMD` heredoc: spans from the parked capture, opener as the span */
+    pm_location_t heredoc_content, heredoc_closing;
+    if (pm_yheredoc_take(p, opening_loc, &heredoc_content, &heredoc_closing)) {
+        content = heredoc_content;
+        closing = heredoc_closing;
+        node_loc = opening;
+        if (node != NULL) node->flags &= (pm_node_flags_t) ~PM_NODE_FLAG_NEWLINE;
+        if (node != NULL && PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) {
+            pm_node_list_t parts = ((pm_interpolated_string_node_t *) node)->parts;
+            for (size_t i = 0; i < parts.size; i++) {
+                parts.nodes[i]->flags &= (pm_node_flags_t) ~PM_NODE_FLAG_NEWLINE;
+            }
+        }
+    }
 
     if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
         pm_string_t unescaped = PM_STRING_EMPTY;
         if (node != NULL) unescaped = ((pm_string_node_t *) node)->unescaped;
         return (NODE *) pm_x_string_node_new(
-            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+            p->pm->arena, ++p->pm->node_id, 0, node_loc,
             opening, content, closing, unescaped);
     }
 
@@ -12567,7 +12806,7 @@ new_xstring(struct parser_params *p, NODE *node, const YYLTYPE *opening_loc, con
     }
     if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) {
         return (NODE *) pm_interpolated_x_string_node_new(
-            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+            p->pm->arena, ++p->pm->node_id, 0, node_loc,
             opening, ((pm_interpolated_string_node_t *) node)->parts, closing);
     }
 
@@ -14258,6 +14497,38 @@ rb_parser_set_location_from_strterm_heredoc(struct parser_params *p, rb_strterm_
     uint32_t end = line + (uint32_t) here->offset + here->length + here->quote;
 
     return rb_parser_set_pos(yylloc, beg, end);
+}
+
+static void
+pm_yheredoc_end_capture(struct parser_params *p)
+{
+    p->yheredoc.closing_beg = YOFF(p->lex.pbeg);
+    p->yheredoc.closing_end = YOFF(p->lex.pend);
+    p->yheredoc.content_beg = p->lex.strterm->u.heredoc.ycontent_beg;
+    p->yheredoc.set = 1;
+
+    /* a pending delayed span belongs to the content token being returned */
+    bool delayed = has_delayed_token(p);
+    if (delayed) {
+        p->yheredoc_content.beg = p->delayed.beg;
+        p->yheredoc_content.end = p->delayed.end;
+        dispatch_delayed_token(p, tSTRING_CONTENT);
+    }
+
+    /* the END token reports at the opener, where lexing resumes; when the
+     * content token is still in flight its span must win, so the opener is
+     * parked for the deferred END instead (see parse_string's TERM path) */
+    YYLTYPE opener;
+    RUBY_SET_YYLLOC_FROM_STRTERM_HEREDOC(opener);
+    if (delayed) {
+        p->yheredoc_opener = opener;
+    }
+    else {
+        *p->yylloc = opener;
+        p->yheredoc_opener.beg = p->yheredoc_opener.end = 0;
+    }
+    lex_goto_eol(p);
+    token_flush(p);
 }
 
 static YYLTYPE *
