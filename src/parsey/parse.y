@@ -70,7 +70,9 @@
 #include "prism/internal/constant_pool.h"
 #include "prism/internal/diagnostic.h"
 #include "prism/internal/encoding.h"
+#include "prism/internal/integer.h"
 #include "prism/internal/line_offset_list.h"
+#include "prism/internal/node.h"
 #include "prism/internal/parser.h"
 
 #include "prism/ast.h"
@@ -2760,7 +2762,7 @@ stmt		: keyword_alias[kw] fitem[new] {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fit
                         p->ctxt.in_rescue = $after_rescue.in_rescue;
                         YYLTYPE loc = code_loc_gen(&@modifier_rescue, &@resbody);
                         $resbody = NEW_RESBODY(0, 0, remove_begin($resbody), 0, &loc);
-                        YSTUB("grammar"); /* PORTME: loc.beg_pos = @mrhs_arg.beg_pos; */
+                        loc.beg = @mrhs_arg.beg;
                         $mrhs_arg = NEW_RESCUE($mrhs_arg, $resbody, 0, &loc);
                         $$ = node_assign(p, (NODE *)$lhs, $mrhs_arg, $lex_ctxt, &@$);
                     }
@@ -3810,7 +3812,7 @@ primary		: inline_primary
                     YYLTYPE inheritance_operator_loc = NULL_LOC;
                     if ($superclass) {
                         inheritance_operator_loc = @superclass;
-                        YSTUB("grammar"); /* PORTME: inheritance_operator_loc.end_pos.column = inheritance_operator_loc.beg_pos.column + 1; */
+                        inheritance_operator_loc.end = inheritance_operator_loc.beg + 1;
                     }
                     $$ = NEW_CLASS($cpath, $bodystmt, $superclass, &@$, &@k_class, &inheritance_operator_loc, &@k_end);
                     nd_set_line(RNODE_CLASS($$)->nd_body, @k_end.end_pos.lineno);
@@ -5691,7 +5693,7 @@ term		: ';'
                     }
                 | '\n'
                     {
-                        YSTUB("grammar"); /* PORTME: @$.end_pos = @$.beg_pos; */
+                        @$.end = @$.beg;
                         token_flush(p);
                     }
                 ;
@@ -5975,6 +5977,12 @@ lex_getline(struct parser_params *p)
     const char *nl = memchr(start, '\n', (size_t) (end - start));
     const char *stop = nl ? nl + 1 : end;
     p->lex.gets_cursor = stop;
+
+    /* Record the next line's start offset, the same bookkeeping the
+     * hand-written lexer does as it crosses each newline. The reader is the
+     * one place every newline passes through exactly once, in order, even
+     * while heredocs rewind the current line. */
+    if (nl != NULL) pm_line_offset_list_append(&p->pm->metadata_arena, &p->pm->line_offsets, YOFF(stop));
 
     rb_parser_string_t *line = pm_ystring_new_shared(&p->pm->metadata_arena, start, (long) (stop - start), p->enc);
     p->line_count++;
@@ -9471,11 +9479,73 @@ node_newnode(struct parser_params *p, enum node_type type, size_t size, size_t a
 
 #define NODE_NEWNODE(node_type, type, loc) (type *)(node_newnode(p, node_type, sizeof(type), RUBY_ALIGNOF(type), loc))
 
+/*
+ * PORTED CONSTRUCTORS. From here down, functions are either stubs (YSTUB) or
+ * real prism node construction; they convert from CRuby's calling conventions
+ * at this boundary so the grammar actions above stay upstream-shaped.
+ */
+
+/* The byte-offset YYLTYPE as a prism location. */
+static inline pm_location_t
+pm_yloc(const YYLTYPE *loc)
+{
+    return (pm_location_t) { loc->beg, loc->end - loc->beg };
+}
+
+/* Mirror of prism.c's pm_integer_arena_move (static there): a parsed integer
+ * that spilled to the heap moves into the arena the node lives in. */
+static void
+pm_yinteger_arena_move(pm_arena_t *arena, pm_integer_t *integer)
+{
+    if (integer->values != NULL) {
+        size_t byte_size = integer->length * sizeof(uint32_t);
+        uint32_t *old_values = integer->values;
+        integer->values = (uint32_t *) pm_arena_memdup(arena, old_values, byte_size, PRISM_ALIGNOF(uint32_t));
+        xfree(old_values);
+    }
+}
+
+/*
+ * Statement sequences. CRuby chains statements through NODE_BLOCK; prism
+ * gathers them in a StatementsNode. Anything that is not already a
+ * StatementsNode is a single statement to be wrapped.
+ */
+static pm_statements_node_t *
+pm_ystatements_ensure(struct parser_params *p, NODE *node)
+{
+    if (node == NULL) {
+        return pm_statements_node_new(p->pm->arena, ++p->pm->node_id, 0, (pm_location_t) { 0 }, (pm_node_list_t) { 0 });
+    }
+    if (PM_NODE_TYPE_P(node, PM_STATEMENTS_NODE)) {
+        return (pm_statements_node_t *) node;
+    }
+
+    pm_node_list_t body = { 0 };
+    pm_node_list_append(p->pm->arena, &body, node);
+    return pm_statements_node_new(p->pm->arena, ++p->pm->node_id, 0, node->location, body);
+}
+
 static rb_node_scope_t *
 rb_node_scope_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_body, NODE *nd_parent, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_scope_new");
-    return NULL;
+    rb_ast_id_table_t *tbl = local_tbl(p);
+    pm_constant_id_list_t locals = { 0 };
+
+    if (tbl != NULL) {
+        pm_constant_id_list_init_capacity(&p->pm->metadata_arena, &locals, (size_t) tbl->size);
+        for (int i = 0; i < tbl->size; i++) {
+            pm_constant_id_list_append(&p->pm->metadata_arena, &locals, pm_yid_to_constant(&p->pm->metadata_arena, &p->pm->constant_pool, tbl->ids[i]));
+        }
+        xfree(tbl);
+    }
+
+    if (nd_args != NULL || nd_parent != NULL) {
+        /* Class/module/def scopes arrive with their node ports. */
+        YSTUB("rb_node_scope_new");
+    }
+
+    pm_statements_node_t *body = pm_ystatements_ensure(p, nd_body);
+    return (rb_node_scope_t *) pm_program_node_new(p->pm->arena, ++p->pm->node_id, 0, body->base.location, locals, body);
 }
 
 static rb_node_scope_t *
@@ -9502,8 +9572,7 @@ rb_node_defs_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd_def
 static rb_node_block_t *
 rb_node_block_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_block_new");
-    return NULL;
+    return (rb_node_block_t *) pm_ystatements_ensure(p, nd_head);
 }
 
 static rb_node_for_t *
@@ -9923,8 +9992,21 @@ rb_node_back_ref_new(struct parser_params *p, long nd_nth, const YYLTYPE *loc)
 static rb_node_integer_t *
 rb_node_integer_new(struct parser_params *p, char* val, int base, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_integer_new");
-    return NULL;
+    xfree(val);
+
+    pm_node_flags_t flags = PM_NODE_FLAG_STATIC_LITERAL;
+    pm_integer_base_t integer_base;
+    switch (base) {
+      case 2: flags |= PM_INTEGER_BASE_FLAGS_BINARY; integer_base = PM_INTEGER_BASE_BINARY; break;
+      case 8: flags |= PM_INTEGER_BASE_FLAGS_OCTAL; integer_base = PM_INTEGER_BASE_OCTAL; break;
+      case 16: flags |= PM_INTEGER_BASE_FLAGS_HEXADECIMAL; integer_base = PM_INTEGER_BASE_HEXADECIMAL; break;
+      default: flags |= PM_INTEGER_BASE_FLAGS_DECIMAL; integer_base = PM_INTEGER_BASE_DECIMAL; break;
+    }
+
+    pm_integer_node_t *node = pm_integer_node_new(p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc), ((pm_integer_t) { 0 }));
+    pm_integer_parse(&node->value, integer_base, p->pm->start + loc->beg, p->pm->start + loc->end);
+    pm_yinteger_arena_move(p->pm->arena, &node->value);
+    return (rb_node_integer_t *) node;
 }
 
 static rb_node_float_t *
@@ -10300,8 +10382,24 @@ fixpos(NODE *node, NODE *orig)
 static NODE*
 block_append(struct parser_params *p, NODE *head, NODE *tail)
 {
-    YSTUB("block_append");
-    return NULL;
+    if (head == NULL) return tail;
+    if (tail == NULL) return head;
+
+    pm_statements_node_t *statements = pm_ystatements_ensure(p, head);
+    pm_node_list_append(p->pm->arena, &statements->body, tail);
+
+    if (statements->base.location.start == 0 && statements->base.location.length == 0) {
+        statements->base.location = tail->location;
+    }
+    else {
+        uint32_t start = statements->base.location.start;
+        uint32_t end = tail->location.start + tail->location.length;
+        if (tail->location.start + tail->location.length > start) {
+            statements->base.location.length = end - start;
+        }
+    }
+
+    return (NODE *) statements;
 }
 
 /* append item to the list */
@@ -10751,30 +10849,26 @@ node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ct
 static NODE *
 value_expr_check(struct parser_params *p, NODE *node)
 {
-    YSTUB("value_expr_check");
-    return NULL;
+    return NULL; /* not void */
 }
 
 static int
 value_expr(struct parser_params *p, NODE *node)
 {
-    YSTUB("value_expr");
-    return 0;
+    return TRUE;
 }
 
 static void
 void_expr(struct parser_params *p, NODE *node)
 {
-    YSTUB("void_expr");
-    return;
+    /* void-expression warnings are not ported */
 }
 
 /* warns useless use of block and returns the last statement node */
 static NODE *
 void_stmts(struct parser_params *p, NODE *node)
 {
-    YSTUB("void_stmts");
-    return NULL;
+    return node;
 }
 
 static NODE *
@@ -11607,6 +11701,10 @@ static pm_node_t *
 pm_yparse_program(struct parser_params *p, pm_node_t *tree)
 {
     pm_parser_t *pm = p->pm;
+
+    if (tree != NULL && PM_NODE_TYPE_P(tree, PM_PROGRAM_NODE)) {
+        return tree;
+    }
 
     pm_statements_node_t *body;
     if (tree != NULL && PM_NODE_TYPE_P(tree, PM_STATEMENTS_NODE)) {
