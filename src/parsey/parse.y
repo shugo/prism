@@ -71,6 +71,7 @@
 #include "prism/internal/diagnostic.h"
 #include "prism/internal/encoding.h"
 #include "prism/internal/integer.h"
+#include "prism/internal/regexp.h"
 #include "prism/internal/line_offset_list.h"
 #include "prism/internal/node.h"
 #include "prism/internal/parser.h"
@@ -1775,7 +1776,7 @@ static NODE *new_regexp(struct parser_params *, NODE *, int, const YYLTYPE *, co
 
 #define make_list(list, loc) ((list) ? (((NODE *)(list))->location = pm_yloc(loc), (list)) : NEW_ZLIST(loc))
 
-static NODE *new_xstring(struct parser_params *, NODE *, const YYLTYPE *loc);
+static NODE *new_xstring(struct parser_params *p, NODE *node, const YYLTYPE *opening_loc, const YYLTYPE *closing_loc, const YYLTYPE *loc);
 
 static NODE *symbol_append(struct parser_params *p, NODE *symbols, NODE *symbol);
 
@@ -5081,7 +5082,7 @@ string1		: tSTRING_BEG string_contents tSTRING_END
 
 xstring		: tXSTRING_BEG xstring_contents tSTRING_END
                     {
-                        $$ = new_xstring(p, heredoc_dedent(p, $2), &@$);
+                        $$ = new_xstring(p, heredoc_dedent(p, $2), &@1, &@3, &@$);
                         if (p->heredoc_indent > 0) {
                             p->heredoc_indent = 0;
                         }
@@ -5760,7 +5761,7 @@ assoc		: arg_value tASSOC arg_value
                 | tSTRING_BEG string_contents tLABEL_END arg_value
                     {
                         YYLTYPE loc = code_loc_gen(&@1, &@3);
-                        $$ = list_append(p, NEW_LIST(dsym_node(p, $2, &loc), &loc), $4);
+                        $$ = NEW_LIST(pm_yassoc(p, dsym_node(p, $2, &loc), $4, NULL, &@$), &@$);
                     }
                 | tDSTAR arg_value
                     {
@@ -9702,6 +9703,19 @@ string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *openin
     return node;
 }
 
+/* Whether every byte of an owned string is 7-bit, for the forced-us-ascii
+ * flag literals carry in an ASCII-compatible source. */
+static bool
+pm_ystr_ascii_only(const pm_string_t *string)
+{
+    const uint8_t *bytes = pm_string_source(string);
+    size_t length = pm_string_length(string);
+    for (size_t i = 0; i < length; i++) {
+        if (bytes[i] >= 0x80) return false;
+    }
+    return true;
+}
+
 /* The constant pool id for an ID's name, in the fork's usual pools. Static
  * IDs (id.h) never went through pm_yid_intern, so their spellings are
  * supplied here as node construction comes to need them. */
@@ -11430,6 +11444,7 @@ rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_a
 static rb_node_dstr_t *
 rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc)
 {
+    if (string == NULL) return (rb_node_dstr_t *) pm_yistr(p, NULL);
     YSTUB("rb_node_dstr_new");
     return NULL;
 }
@@ -11959,6 +11974,24 @@ list_append(struct parser_params *p, NODE *list, NODE *item)
         YYLTYPE item_loc = item ? pm_yloc_of(item) : NULL_LOC;
         return NEW_LIST(item, &item_loc);
     }
+    if (PM_NODE_TYPE_P(list, PM_INTERPOLATED_STRING_NODE)) {
+        pm_interpolated_string_node_t *istr = (pm_interpolated_string_node_t *) list;
+        /* an interpolation carrier appended onto a fresh empty one already
+         * is the carrier (the regexp-contents chaining shape) */
+        if (istr->parts.size == 0 && item != NULL && PM_NODE_TYPE_P(item, PM_INTERPOLATED_STRING_NODE)) {
+            return item;
+        }
+        if (item != NULL) {
+            pm_node_list_append(p->pm->arena, &istr->parts, pm_yistr_part(item));
+            if (istr->parts.size == 1) istr->base.location = item->location;
+            else {
+                uint32_t end = item->location.start + item->location.length;
+                istr->base.location.length = end - istr->base.location.start;
+            }
+        }
+        return list;
+    }
+
     if (!PM_NODE_TYPE_P(list, PM_ARRAY_NODE)) {
         YSTUB("list_append");
         return list;
@@ -12061,8 +12094,7 @@ nd_copy_flag(NODE *new_node, NODE *old_node)
 static NODE *
 str2dstr(struct parser_params *p, NODE *node)
 {
-    YSTUB("str2dstr");
-    return NULL;
+    return pm_yistr(p, node);
 }
 
 static NODE *
@@ -12196,11 +12228,92 @@ last_expr_once_body(NODE *node)
     return node;
 }
 
+/* Context carried through prism's regexp parser callback: the base struct is
+ * first so the callback can recover the whole. */
+typedef struct {
+    pm_regexp_name_data_t base;
+    struct parser_params *p;
+    const uint8_t *content;
+    size_t content_length;
+    pm_location_t content_loc;
+    pm_location_t receiver_loc;
+    pm_node_list_t targets;
+} pm_ymatch_data_t;
+
+static void
+pm_ymatch_capture(pm_parser_t *parser, const pm_string_t *capture, bool shared, pm_regexp_name_data_t *base)
+{
+    (void) shared;
+    pm_ymatch_data_t *data = (pm_ymatch_data_t *) base;
+    struct parser_params *p = data->p;
+
+    const uint8_t *source = pm_string_source(capture);
+    size_t length = pm_string_length(capture);
+    if (length == 0 || memchr(source, '\\', length) != NULL) return;
+
+    /* only a name that would be a valid local variable binds */
+    const pm_encoding_t *enc = parser->encoding;
+    if (!(enc->alpha_char(source, (ptrdiff_t) length) || source[0] == '_') || enc->isupper_char(source, (ptrdiff_t) length)) return;
+    for (size_t i = 1; i < length; ) {
+        size_t width = (size_t) enc->char_width(source + i, (ptrdiff_t) (length - i));
+        if (width == 0) return;
+        if (width == 1 && !(enc->alnum_char(source + i, 1) || source[i] == '_')) return;
+        i += width;
+    }
+    /* the gperf table compares with strcmp, so it needs a terminated copy */
+    if (length <= 12) {
+        char keyword[13];
+        memcpy(keyword, source, length);
+        keyword[length] = '\0';
+        if (reserved_word(keyword, (unsigned int) length) != NULL) return;
+    }
+
+    /* the name's own span, when the unescaped content mirrors the source */
+    pm_location_t target_loc = data->receiver_loc;
+    if (data->content_length == data->content_loc.length) {
+        target_loc = (pm_location_t) { data->content_loc.start + (uint32_t) (source - data->content), (uint32_t) length };
+    }
+
+    ID id = pm_yid_intern(&p->pm->metadata_arena, &p->pm->constant_pool, source, length, p->enc);
+    pm_constant_id_t name = pm_yid2const(p, id);
+    if (name == PM_CONSTANT_ID_UNSET || pm_constant_id_list_includes(&data->base.names, name)) return;
+    pm_constant_id_list_append(p->pm->arena, &data->base.names, name);
+
+    YYLTYPE name_loc = { target_loc.start, target_loc.start + target_loc.length };
+    NODE *target = pm_ytarget(p, assignable(p, id, 0, &name_loc));
+    if (target != NULL) {
+        target->location = target_loc;
+        pm_node_list_append(p->pm->arena, &data->targets, target);
+    }
+}
+
 static NODE*
 match_op(struct parser_params *p, NODE *node1, NODE *node2, const YYLTYPE *op_loc, const YYLTYPE *loc)
 {
-    YSTUB("match_op");
-    return NULL;
+    NODE *call = call_bin_op(p, node1, tMATCH, node2, op_loc, loc);
+
+    if (node1 != NULL && PM_NODE_TYPE_P(node1, PM_REGULAR_EXPRESSION_NODE)) {
+        pm_regular_expression_node_t *regexp = (pm_regular_expression_node_t *) node1;
+
+        pm_ymatch_data_t data = { { (pm_call_node_t *) call, NULL, { 0 } }, p, NULL, 0, { 0 }, { 0 }, { 0 } };
+        data.content = pm_string_source(&regexp->unescaped);
+        data.content_length = pm_string_length(&regexp->unescaped);
+        data.content_loc = regexp->content_loc;
+        data.receiver_loc = regexp->base.location;
+
+        pm_regexp_parse_named_captures(
+            p->pm, data.content, data.content_length, false,
+            PM_NODE_FLAG_P(node1, PM_REGULAR_EXPRESSION_FLAGS_EXTENDED),
+            pm_ymatch_capture, &data.base);
+
+        if (data.targets.size > 0) {
+            return (NODE *) pm_match_write_node_new(
+                p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+                (pm_call_node_t *) call, data.targets);
+        }
+    }
+
+    return call;
 }
 
 # if WARN_PAST_SCOPE
@@ -12379,8 +12492,52 @@ dregex_fragment_setenc(struct parser_params *p, rb_node_dregx_t *const dreg, int
 static NODE *
 new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc, const YYLTYPE *opening_loc, const YYLTYPE *content_loc, const YYLTYPE *closing_loc)
 {
+    (void) content_loc;
+
+    pm_node_flags_t flags = 0;
+    if (options & RE_ONIG_OPTION_IGNORECASE) flags |= PM_REGULAR_EXPRESSION_FLAGS_IGNORE_CASE;
+    if (options & RE_ONIG_OPTION_EXTEND) flags |= PM_REGULAR_EXPRESSION_FLAGS_EXTENDED;
+    if (options & RE_ONIG_OPTION_MULTILINE) flags |= PM_REGULAR_EXPRESSION_FLAGS_MULTI_LINE;
+    if (options & RE_OPTION_ONCE) flags |= PM_REGULAR_EXPRESSION_FLAGS_ONCE;
+
+    /* the lexer stores the e/s/u option character itself; n has no
+     * character and arrives as the encoding-none bit */
+    bool explicit_encoding = true;
+    switch (RE_OPTION_ENCODING_IDX(options)) {
+      case 'e': flags |= PM_REGULAR_EXPRESSION_FLAGS_EUC_JP; break;
+      case 's': flags |= PM_REGULAR_EXPRESSION_FLAGS_WINDOWS_31J; break;
+      case 'u': flags |= PM_REGULAR_EXPRESSION_FLAGS_UTF_8; break;
+      default: explicit_encoding = false; break;
+    }
+    if (RE_OPTION_ENCODING_NONE(options)) flags |= PM_REGULAR_EXPRESSION_FLAGS_ASCII_8BIT;
+
+    pm_location_t opening = pm_yloc(opening_loc);
+    pm_location_t closing = pm_yloc(closing_loc);
+    pm_location_t content = { opening.start + opening.length, closing.start - (opening.start + opening.length) };
+
+    if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
+        pm_string_t unescaped = PM_STRING_EMPTY;
+        if (node != NULL) unescaped = ((pm_string_node_t *) node)->unescaped;
+        flags |= PM_NODE_FLAG_STATIC_LITERAL;
+        if (!explicit_encoding && pm_ystr_ascii_only(&unescaped)) {
+            flags |= PM_REGULAR_EXPRESSION_FLAGS_FORCED_US_ASCII_ENCODING;
+        }
+        return (NODE *) pm_regular_expression_node_new(
+            p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+            opening, content, closing, unescaped);
+    }
+
+    if (PM_NODE_TYPE_P(node, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(node, PM_EMBEDDED_VARIABLE_NODE)) {
+        node = pm_yistr(p, node);
+    }
+    if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) {
+        return (NODE *) pm_interpolated_regular_expression_node_new(
+            p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+            opening, ((pm_interpolated_string_node_t *) node)->parts, closing);
+    }
+
     YSTUB("new_regexp");
-    return NULL;
+    return node;
 }
 
 static rb_node_kw_arg_t *
@@ -12391,10 +12548,31 @@ new_kw_arg(struct parser_params *p, NODE *k, const YYLTYPE *loc)
 }
 
 static NODE *
-new_xstring(struct parser_params *p, NODE *node, const YYLTYPE *loc)
+new_xstring(struct parser_params *p, NODE *node, const YYLTYPE *opening_loc, const YYLTYPE *closing_loc, const YYLTYPE *loc)
 {
+    pm_location_t opening = pm_yloc(opening_loc);
+    pm_location_t closing = pm_yloc(closing_loc);
+    pm_location_t content = { opening.start + opening.length, closing.start - (opening.start + opening.length) };
+
+    if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
+        pm_string_t unescaped = PM_STRING_EMPTY;
+        if (node != NULL) unescaped = ((pm_string_node_t *) node)->unescaped;
+        return (NODE *) pm_x_string_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+            opening, content, closing, unescaped);
+    }
+
+    if (PM_NODE_TYPE_P(node, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(node, PM_EMBEDDED_VARIABLE_NODE)) {
+        node = pm_yistr(p, node);
+    }
+    if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) {
+        return (NODE *) pm_interpolated_x_string_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+            opening, ((pm_interpolated_string_node_t *) node)->parts, closing);
+    }
+
     YSTUB("new_xstring");
-    return NULL;
+    return node;
 }
 
 
@@ -12867,21 +13045,41 @@ cond0(struct parser_params *p, NODE *node, enum cond_type type, const YYLTYPE *l
     return NULL;
 }
 
+/* A regexp in condition position matches against $_; prism has dedicated
+ * node types for it. Flip-flop ranges are not ported yet. */
+static NODE*
+pm_ycond_regexp(struct parser_params *p, NODE *node)
+{
+    if (node == NULL) return NULL;
+    if (PM_NODE_TYPE_P(node, PM_REGULAR_EXPRESSION_NODE)) {
+        pm_regular_expression_node_t *regexp = (pm_regular_expression_node_t *) node;
+        return (NODE *) pm_match_last_line_node_new(
+            p->pm->arena, ++p->pm->node_id, regexp->base.flags, regexp->base.location,
+            regexp->opening_loc, regexp->content_loc, regexp->closing_loc, regexp->unescaped);
+    }
+    if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_REGULAR_EXPRESSION_NODE)) {
+        pm_interpolated_regular_expression_node_t *regexp = (pm_interpolated_regular_expression_node_t *) node;
+        return (NODE *) pm_interpolated_match_last_line_node_new(
+            p->pm->arena, ++p->pm->node_id, regexp->base.flags, regexp->base.location,
+            regexp->opening_loc, regexp->parts, regexp->closing_loc);
+    }
+    return node;
+}
+
 static NODE*
 cond(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 {
+    (void) loc;
     if (node == 0) return 0;
-    /* PORTME: as method_cond. */
-    return node;
+    return pm_ycond_regexp(p, node);
 }
 
 static NODE*
 method_cond(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 {
+    (void) loc;
     if (node == 0) return 0;
-    /* PORTME: cond0's regexp/range/flip-flop condition rewrites arrive with
-     * those nodes; every other expression passes through unchanged. */
-    return node;
+    return pm_ycond_regexp(p, node);
 }
 
 static NODE*
@@ -13120,8 +13318,42 @@ new_hash_pattern_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, co
 static NODE*
 dsym_node(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 {
+    /* the token is :"..." / :'...' (two-byte opener, one-byte closer), or in
+     * label position "...": (one-byte opener, two-byte closer) */
+    pm_location_t location = pm_yloc(loc);
+    bool label = p->pm->start[location.start] != ':';
+    uint32_t open_width = label ? 1 : 2;
+    uint32_t close_width = label ? 2 : 1;
+    bool single_quoted = p->pm->start[location.start + open_width - 1] == '\'';
+
+    pm_location_t opening = { location.start, open_width };
+    pm_location_t closing = { location.start + location.length - close_width, close_width };
+    pm_location_t value = { opening.start + open_width, closing.start - (opening.start + open_width) };
+
+    if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
+        pm_string_t unescaped = PM_STRING_EMPTY;
+        if (node != NULL) unescaped = ((pm_string_node_t *) node)->unescaped;
+        pm_node_flags_t flags = PM_NODE_FLAG_STATIC_LITERAL;
+        /* an empty interpolatable symbol keeps the source encoding */
+        if (pm_ystr_ascii_only(&unescaped) && (single_quoted || pm_string_length(&unescaped) > 0)) {
+            flags |= PM_SYMBOL_FLAGS_FORCED_US_ASCII_ENCODING;
+        }
+        return (NODE *) pm_symbol_node_new(
+            p->pm->arena, ++p->pm->node_id, flags, location,
+            opening, value, closing, unescaped);
+    }
+
+    if (PM_NODE_TYPE_P(node, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(node, PM_EMBEDDED_VARIABLE_NODE)) {
+        node = pm_yistr(p, node);
+    }
+    if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) {
+        return (NODE *) pm_interpolated_symbol_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, location,
+            opening, ((pm_interpolated_string_node_t *) node)->parts, closing);
+    }
+
     YSTUB("dsym_node");
-    return NULL;
+    return node;
 }
 
 static int
