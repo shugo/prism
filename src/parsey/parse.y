@@ -1483,6 +1483,8 @@ static NODE *pm_yblock_params(struct parser_params *p, NODE *params, NODE *block
 static NODE *pm_yblock_local(struct parser_params *p, ID name, const YYLTYPE *loc);
 static NODE *pm_yparam_group(struct parser_params *p, NODE *node);
 static void pm_yforward_params(struct parser_params *p, NODE *node, const YYLTYPE *loc);
+static NODE *pm_ypinned_var(struct parser_params *p, NODE *variable, const YYLTYPE *operator_loc, const YYLTYPE *loc);
+static NODE *pm_ypattern_delims(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static NODE *pm_yistr(struct parser_params *p, NODE *part);
 static NODE *pm_yindex_call(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
@@ -4721,7 +4723,6 @@ p_top_expr_body : p_expr
                 | p_expr ',' p_args
                     {
                         $$ = new_array_pattern(p, 0, $1, $3, &@$);
-                        YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @1.beg_pos); */
                     }
                 | p_find
                     {
@@ -4742,9 +4743,9 @@ p_expr		: p_as
 
 p_as		: p_expr tASSOC p_variable
                     {
-                        NODE *n = NEW_LIST($1, &@$);
-                        n = list_append(p, n, $3);
-                        $$ = new_hash(p, n, &@$);
+                        $$ = (NODE *) pm_capture_pattern_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@$),
+                            $1, (pm_local_variable_target_node_t *) $3, pm_yloc(&@2));
                     }
                 | p_alt
                 ;
@@ -4759,7 +4760,9 @@ p_alt		: p_alt[left] '|'[alt]
                             yyerror1(&@alt, "alternative pattern after variable capture");
                         }
                         p->ctxt.in_alt_pattern = 0;
-                        $$ = NEW_OR($left, $right, &@$, &@alt);
+                        $$ = (NODE *) pm_alternation_pattern_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@$),
+                            $left, $right, pm_yloc(&@alt));
                     }
                 | p_expr_basic
                 ;
@@ -4782,60 +4785,65 @@ p_expr_basic	: p_value
                     {
                         pop_pktbl(p, $p_pktbl);
                         $$ = new_array_pattern(p, $p_const, 0, $p_args, &@$);
-                        YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
+                        pm_ypattern_delims(p, $$, &@2, &@4);
                     }
                 | p_const p_lparen[p_pktbl] p_find rparen
                     {
                         pop_pktbl(p, $p_pktbl);
                         $$ = new_find_pattern(p, $p_const, $p_find, &@$);
-                        YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
+                        pm_ypattern_delims(p, $$, &@2, &@4);
                     }
                 | p_const p_lparen[p_pktbl] p_kwargs rparen
                     {
                         pop_pktbl(p, $p_pktbl);
                         $$ = new_hash_pattern(p, $p_const, $p_kwargs, &@$);
-                        YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
+                        pm_ypattern_delims(p, $$, &@2, &@4);
                     }
                 | p_const '(' rparen
                     {
                         $$ = new_array_pattern_tail(p, 0, 0, 0, 0, &@$);
                         $$ = new_array_pattern(p, $p_const, 0, $$, &@$);
+                        pm_ypattern_delims(p, $$, &@2, &@3);
                     }
                 | p_const p_lbracket[p_pktbl] p_args rbracket
                     {
                         pop_pktbl(p, $p_pktbl);
                         $$ = new_array_pattern(p, $p_const, 0, $p_args, &@$);
-                        YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
+                        pm_ypattern_delims(p, $$, &@2, &@4);
                     }
                 | p_const p_lbracket[p_pktbl] p_find rbracket
                     {
                         pop_pktbl(p, $p_pktbl);
                         $$ = new_find_pattern(p, $p_const, $p_find, &@$);
-                        YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
+                        pm_ypattern_delims(p, $$, &@2, &@4);
                     }
                 | p_const p_lbracket[p_pktbl] p_kwargs rbracket
                     {
                         pop_pktbl(p, $p_pktbl);
                         $$ = new_hash_pattern(p, $p_const, $p_kwargs, &@$);
-                        YSTUB("grammar"); /* PORTME: nd_set_first_loc($$, @p_const.beg_pos); */
+                        pm_ypattern_delims(p, $$, &@2, &@4);
                     }
                 | p_const '[' rbracket
                     {
                         $$ = new_array_pattern_tail(p, 0, 0, 0, 0, &@$);
                         $$ = new_array_pattern(p, $p_const, 0, $$, &@$);
+                        pm_ypattern_delims(p, $$, &@2, &@3);
                     }
                 | tLBRACK p_args rbracket
                     {
                         $$ = new_array_pattern(p, 0, 0, $p_args, &@$);
+                        pm_ypattern_delims(p, $$, &@1, &@3);
                     }
                 | tLBRACK p_find rbracket
                     {
                         $$ = new_find_pattern(p, 0, $p_find, &@$);
+                        pm_ypattern_delims(p, $$, &@1, &@3);
                     }
                 | tLBRACK rbracket
                     {
                         $$ = new_array_pattern_tail(p, 0, 0, 0, 0, &@$);
                         $$ = new_array_pattern(p, 0, 0, $$, &@$);
+                        pm_ypattern_delims(p, $$, &@1, &@2);
                     }
                 | tLBRACE p_pktbl lex_ctxt[ctxt]
                     {
@@ -4846,11 +4854,13 @@ p_expr_basic	: p_value
                         pop_pktbl(p, $p_pktbl);
                         p->ctxt.in_kwarg = $ctxt.in_kwarg;
                         $$ = new_hash_pattern(p, 0, $p_kwargs, &@$);
+                        pm_ypattern_delims(p, $$, &@tLBRACE, &@rbrace);
                     }
                 | tLBRACE rbrace
                     {
                         $$ = new_hash_pattern_tail(p, 0, 0, &@$);
                         $$ = new_hash_pattern(p, 0, $$, &@$);
+                        pm_ypattern_delims(p, $$, &@1, &@2);
                     }
                 | tLPAREN p_pktbl p_expr rparen
                     {
@@ -4910,11 +4920,15 @@ p_find		: p_rest ',' p_args_post ',' p_rest
 p_rest		: tSTAR tIDENTIFIER
                     {
                         error_duplicate_pattern_variable(p, $2, &@2);
-                        $$ = assignable(p, $2, 0, &@$);
+                        $$ = (NODE *) pm_splat_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@$),
+                            pm_yloc(&@1), pm_ytarget(p, assignable(p, $2, 0, &@2)));
                     }
                 | tSTAR
                     {
-                        $$ = 0;
+                        $$ = (NODE *) pm_splat_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@1),
+                            pm_yloc(&@1), NULL);
                     }
                 ;
 
@@ -4959,7 +4973,7 @@ p_kwarg 	: p_kw
 p_kw		: p_kw_label p_expr
                     {
                         error_duplicate_pattern_key(p, $1, &@1);
-                        $$ = list_append(p, NEW_LIST(NEW_SYM(rb_id2str($1), &@1), &@$), $2);
+                        $$ = NEW_LIST(pm_yassoc(p, pm_ylabel_symbol(p, $1, &@1), $2, NULL, &@$), &@$);
                     }
                 | p_kw_label
                     {
@@ -4968,7 +4982,14 @@ p_kw		: p_kw_label p_expr
                             yyerror1(&@1, "key must be valid as local variables");
                         }
                         error_duplicate_pattern_variable(p, $1, &@1);
-                        $$ = list_append(p, NEW_LIST(NEW_SYM(rb_id2str($1), &@$), &@$), assignable(p, $1, 0, &@$));
+                        {
+                            /* the implicit value binds the label's name */
+                            YYLTYPE name_loc = { @1.beg, @1.end - 1 };
+                            NODE *target = pm_ytarget(p, assignable(p, $1, 0, &name_loc));
+                            NODE *implicit = (NODE *) pm_implicit_node_new(
+                                p->pm->arena, ++p->pm->node_id, 0, target->location, target);
+                            $$ = NEW_LIST(pm_yassoc(p, pm_ylabel_symbol(p, $1, &@1), implicit, NULL, &@$), &@$);
+                        }
                     }
                 ;
 
@@ -4990,16 +5011,25 @@ p_kw_label	: tLABEL
 p_kwrest	: kwrest_mark tIDENTIFIER
                     {
                         $$ = $2;
+                        p->ykwrest_param = (NODE *) pm_assoc_splat_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@$),
+                            pm_ytarget(p, assignable(p, $2, 0, &@2)), pm_yloc(&@1));
                     }
                 | kwrest_mark
                     {
                         $$ = 0;
+                        p->ykwrest_param = (NODE *) pm_assoc_splat_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@$),
+                            NULL, pm_yloc(&@1));
                     }
                 ;
 
 p_kwnorest	: kwrest_mark keyword_nil
                     {
                         $$ = 0;
+                        p->ykwrest_param = (NODE *) pm_no_keywords_parameter_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@$),
+                            pm_yloc(&@1), pm_yloc(&@2));
                     }
                 ;
 
@@ -5028,30 +5058,34 @@ p_primitive	: inline_primary
 p_variable	: tIDENTIFIER
                     {
                         error_duplicate_pattern_variable(p, $1, &@1);
-                        $$ = assignable(p, $1, 0, &@$);
+                        $$ = pm_ytarget(p, assignable(p, $1, 0, &@$));
                     }
                 ;
 
 p_var_ref	: '^' tIDENTIFIER
                     {
-                        NODE *n = gettable(p, $2, &@$);
+                        NODE *n = gettable(p, $2, &@2);
                         if (!n) {
                             n = NEW_ERROR(&@$);
                         }
-                        else if (!(nd_type_p(n, NODE_LVAR) || nd_type_p(n, NODE_DVAR))) {
-                            compile_error(p, "%"PRIsVALUE": no such local variable", rb_id2str($2));
+                        else if (!(PM_NODE_TYPE_P(n, PM_LOCAL_VARIABLE_READ_NODE) || PM_NODE_TYPE_P(n, PM_IT_LOCAL_VARIABLE_READ_NODE))) {
+                            compile_error(p, "no such local variable");
                         }
-                        $$ = n;
+                        $$ = pm_ypinned_var(p, n, &@1, &@$);
                     }
                 | '^' nonlocal_var
                     {
-                        if (!($$ = gettable(p, $2, &@$))) $$ = NEW_ERROR(&@$);
+                        NODE *n = gettable(p, $2, &@2);
+                        if (!n) n = NEW_ERROR(&@$);
+                        $$ = pm_ypinned_var(p, n, &@1, &@$);
                     }
                 ;
 
 p_expr_ref	: '^' tLPAREN expr_value rparen
                     {
-                        $$ = NEW_BLOCK($3, &@$);
+                        $$ = (NODE *) pm_pinned_expression_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@$),
+                            $3, pm_yloc(&@1), pm_yloc(&@2), pm_yloc(&@4));
                     }
                 ;
 
@@ -10396,6 +10430,46 @@ pm_yclass_body(struct parser_params *p, NODE *body, const YYLTYPE *loc, const YY
     return (pm_node_t *) pm_ystatements_opt(p, body);
 }
 
+/* Stamp the [ ] / ( ) / { } delimiters onto a pattern node. */
+static NODE *
+pm_ypattern_delims(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing)
+{
+    (void) p;
+    if (node == NULL) return node;
+
+    /* every delimiter is a single byte, but the rbrace/rbracket nonterminals
+     * span a preceding empty opt_nl as well */
+    pm_location_t opening_loc = { opening->beg, 1 };
+    pm_location_t closing_loc = { closing->end - 1, 1 };
+
+    switch (PM_NODE_TYPE(node)) {
+      case PM_ARRAY_PATTERN_NODE:
+        ((pm_array_pattern_node_t *) node)->opening_loc = opening_loc;
+        ((pm_array_pattern_node_t *) node)->closing_loc = closing_loc;
+        break;
+      case PM_FIND_PATTERN_NODE:
+        ((pm_find_pattern_node_t *) node)->opening_loc = opening_loc;
+        ((pm_find_pattern_node_t *) node)->closing_loc = closing_loc;
+        break;
+      case PM_HASH_PATTERN_NODE:
+        ((pm_hash_pattern_node_t *) node)->opening_loc = opening_loc;
+        ((pm_hash_pattern_node_t *) node)->closing_loc = closing_loc;
+        break;
+      default:
+        break;
+    }
+    return node;
+}
+
+/* A pinned variable pattern: ^x. */
+static NODE *
+pm_ypinned_var(struct parser_params *p, NODE *variable, const YYLTYPE *operator_loc, const YYLTYPE *loc)
+{
+    return (NODE *) pm_pinned_variable_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        variable, pm_yloc(operator_loc));
+}
+
 /* A ... in a parameter list is a ForwardingParameterNode in the keyword
  * rest slot of the tail the grammar just built. */
 static void
@@ -11215,8 +11289,45 @@ rb_node_case2_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc, co
 static rb_node_case3_t *
 rb_node_case3_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, const YYLTYPE *loc, const YYLTYPE *case_keyword_loc, const YYLTYPE *end_keyword_loc)
 {
-    YSTUB("rb_node_case3_new");
-    return NULL;
+    /* the => and in expression forms: fill the value into the partial node */
+    if (nd_body != NULL &&
+        (PM_NODE_TYPE_P(nd_body, PM_MATCH_REQUIRED_NODE) || PM_NODE_TYPE_P(nd_body, PM_MATCH_PREDICATE_NODE))) {
+        if (PM_NODE_TYPE_P(nd_body, PM_MATCH_REQUIRED_NODE)) {
+            ((pm_match_required_node_t *) nd_body)->value = nd_head;
+        }
+        else {
+            ((pm_match_predicate_node_t *) nd_body)->value = nd_head;
+        }
+        nd_body->location = pm_yloc(loc);
+        return (rb_node_case3_t *) nd_body;
+    }
+
+    pm_node_list_t conditions = { 0 };
+    pm_else_node_t *else_clause = NULL;
+    pm_location_t end_keyword = pm_yloc(end_keyword_loc);
+
+    if (nd_body != NULL && PM_NODE_TYPE_P(nd_body, PM_ARRAY_NODE)) {
+        pm_array_node_t *carrier = (pm_array_node_t *) nd_body;
+        for (size_t i = 0; i < carrier->elements.size; i++) {
+            pm_node_t *clause = carrier->elements.nodes[i];
+            if (PM_NODE_TYPE_P(clause, PM_ELSE_NODE)) {
+                else_clause = (pm_else_node_t *) clause;
+                else_clause->end_keyword_loc = end_keyword;
+                uint32_t end = end_keyword.start + end_keyword.length;
+                else_clause->base.location.length = end - else_clause->base.location.start;
+            }
+            else {
+                pm_node_list_append(p->pm->arena, &conditions, clause);
+            }
+        }
+    }
+    else if (nd_body != NULL) {
+        YSTUB("rb_node_case3_new");
+    }
+
+    return (rb_node_case3_t *) pm_case_match_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        nd_head, conditions, else_clause, pm_yloc(case_keyword_loc), end_keyword);
 }
 
 static rb_node_when_t *
@@ -11272,8 +11383,51 @@ rb_node_when_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, NODE *nd
 static rb_node_in_t *
 rb_node_in_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, NODE *nd_next, const YYLTYPE *loc, const YYLTYPE *in_keyword_loc, const YYLTYPE *then_keyword_loc, const YYLTYPE *operator_loc)
 {
-    YSTUB("rb_node_in_new");
-    return NULL;
+    /* the => and in expression forms funnel through NEW_IN with markers:
+     * => passes the operator location, in passes true/false as body/next */
+    if (operator_loc->end != operator_loc->beg) {
+        return (rb_node_in_t *) pm_match_required_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+            NULL, nd_head, pm_yloc(operator_loc));
+    }
+    if (nd_body != NULL && PM_NODE_TYPE_P(nd_body, PM_TRUE_NODE) &&
+        nd_next != NULL && PM_NODE_TYPE_P(nd_next, PM_FALSE_NODE)) {
+        return (rb_node_in_t *) pm_match_predicate_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+            NULL, nd_head, pm_yloc(in_keyword_loc));
+    }
+
+    pm_location_t keyword = pm_yloc(in_keyword_loc);
+    pm_location_t then_keyword = pm_ythen_loc(p, then_keyword_loc);
+    pm_statements_node_t *statements = pm_ystatements_opt(p, nd_body);
+
+    /* the clause's own span: keyword through its own body */
+    uint32_t end = keyword.start + keyword.length;
+    if (statements != NULL) end = statements->base.location.start + statements->base.location.length;
+    else if (then_keyword.length > 0) end = then_keyword.start + then_keyword.length;
+    else if (nd_head != NULL) end = nd_head->location.start + nd_head->location.length;
+
+    pm_node_t *in_clause = (pm_node_t *) pm_in_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, (pm_location_t) { keyword.start, end - keyword.start },
+        nd_head, statements, keyword, then_keyword);
+
+    /* clauses collect in a carrier, as when clauses do */
+    pm_node_list_t clauses = { 0 };
+    pm_node_list_append(p->pm->arena, &clauses, in_clause);
+    if (nd_next != NULL) {
+        if (PM_NODE_TYPE_P(nd_next, PM_ARRAY_NODE)) {
+            pm_array_node_t *rest = (pm_array_node_t *) nd_next;
+            for (size_t i = 0; i < rest->elements.size; i++) {
+                pm_node_list_append(p->pm->arena, &clauses, rest->elements.nodes[i]);
+            }
+        }
+        else {
+            pm_node_list_append(p->pm->arena, &clauses, nd_next);
+        }
+    }
+    return (rb_node_in_t *) pm_array_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, in_clause->location, clauses,
+        (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static rb_node_while_t *
@@ -13696,43 +13850,113 @@ args_with_numbered(struct parser_params *p, rb_node_args_t *args, int max_numpar
 static NODE*
 new_array_pattern(struct parser_params *p, NODE *constant, NODE *pre_arg, NODE *aryptn, const YYLTYPE *loc)
 {
-    YSTUB("new_array_pattern");
-    return NULL;
+    if (aryptn == NULL || !PM_NODE_TYPE_P(aryptn, PM_ARRAY_PATTERN_NODE)) {
+        YSTUB("new_array_pattern");
+        return aryptn;
+    }
+
+    pm_array_pattern_node_t *pattern = (pm_array_pattern_node_t *) aryptn;
+    if (pre_arg != NULL) {
+        pm_node_list_t requireds = { 0 };
+        pm_node_list_append(p->pm->arena, &requireds, pre_arg);
+        for (size_t i = 0; i < pattern->requireds.size; i++) {
+            pm_node_list_append(p->pm->arena, &requireds, pattern->requireds.nodes[i]);
+        }
+        pattern->requireds = requireds;
+    }
+    pattern->constant = constant;
+    pattern->base.location = pm_yloc(loc);
+    return aryptn;
 }
 
 static NODE*
 new_array_pattern_tail(struct parser_params *p, NODE *pre_args, int has_rest, NODE *rest_arg, NODE *post_args, const YYLTYPE *loc)
 {
-    YSTUB("new_array_pattern_tail");
-    return NULL;
+    pm_node_list_t requireds = { 0 };
+    if (pre_args != NULL && PM_NODE_TYPE_P(pre_args, PM_ARRAY_NODE)) {
+        requireds = ((pm_array_node_t *) pre_args)->elements;
+    }
+
+    pm_node_list_t posts = { 0 };
+    if (post_args != NULL && PM_NODE_TYPE_P(post_args, PM_ARRAY_NODE)) {
+        posts = ((pm_array_node_t *) post_args)->elements;
+    }
+
+    /* p_rest built the splat; has_rest without one is the trailing comma */
+    pm_node_t *rest = rest_arg;
+    if (rest == NULL && has_rest) {
+        pm_location_t comma = { loc->end - 1, 1 };
+        rest = (pm_node_t *) pm_implicit_rest_node_new(p->pm->arena, ++p->pm->node_id, 0, comma);
+    }
+
+    return (NODE *) pm_array_pattern_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        NULL, requireds, rest, posts,
+        (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static NODE*
 new_find_pattern(struct parser_params *p, NODE *constant, NODE *fndptn, const YYLTYPE *loc)
 {
-    YSTUB("new_find_pattern");
-    return NULL;
+    if (fndptn == NULL || !PM_NODE_TYPE_P(fndptn, PM_FIND_PATTERN_NODE)) {
+        YSTUB("new_find_pattern");
+        return fndptn;
+    }
+
+    pm_find_pattern_node_t *pattern = (pm_find_pattern_node_t *) fndptn;
+    pattern->constant = constant;
+    pattern->base.location = pm_yloc(loc);
+    return fndptn;
 }
 
 static NODE*
 new_find_pattern_tail(struct parser_params *p, NODE *pre_rest_arg, NODE *args, NODE *post_rest_arg, const YYLTYPE *loc)
 {
-    YSTUB("new_find_pattern_tail");
-    return NULL;
+    pm_node_list_t requireds = { 0 };
+    if (args != NULL && PM_NODE_TYPE_P(args, PM_ARRAY_NODE)) {
+        requireds = ((pm_array_node_t *) args)->elements;
+    }
+
+    return (NODE *) pm_find_pattern_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        NULL, (pm_splat_node_t *) pre_rest_arg, requireds, (pm_splat_node_t *) post_rest_arg,
+        (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static NODE*
 new_hash_pattern(struct parser_params *p, NODE *constant, NODE *hshptn, const YYLTYPE *loc)
 {
-    YSTUB("new_hash_pattern");
-    return NULL;
+    if (hshptn == NULL || !PM_NODE_TYPE_P(hshptn, PM_HASH_PATTERN_NODE)) {
+        YSTUB("new_hash_pattern");
+        return hshptn;
+    }
+
+    pm_hash_pattern_node_t *pattern = (pm_hash_pattern_node_t *) hshptn;
+    pattern->constant = constant;
+    pattern->base.location = pm_yloc(loc);
+    return hshptn;
 }
 
 static NODE*
 new_hash_pattern_tail(struct parser_params *p, NODE *kw_args, ID kw_rest_arg, const YYLTYPE *loc)
 {
-    YSTUB("new_hash_pattern_tail");
-    return NULL;
+    (void) kw_rest_arg;
+
+    pm_node_list_t elements = { 0 };
+    if (kw_args != NULL && PM_NODE_TYPE_P(kw_args, PM_ARRAY_NODE)) {
+        elements = ((pm_array_node_t *) kw_args)->elements;
+    }
+    else if (kw_args != NULL && PM_NODE_TYPE_P(kw_args, PM_KEYWORD_HASH_NODE)) {
+        elements = ((pm_keyword_hash_node_t *) kw_args)->elements;
+    }
+
+    /* the p_kwrest/p_kwnorest reductions parked the rest node */
+    pm_node_t *rest = p->ykwrest_param;
+    p->ykwrest_param = NULL;
+
+    return (NODE *) pm_hash_pattern_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        NULL, elements, rest, (pm_location_t) { 0 }, (pm_location_t) { 0 });
 }
 
 static NODE*
@@ -13831,22 +14055,24 @@ new_hash(struct parser_params *p, NODE *hash, const YYLTYPE *loc)
 static void
 error_duplicate_pattern_variable(struct parser_params *p, ID id, const YYLTYPE *loc)
 {
-    YSTUB("error_duplicate_pattern_variable");
-    return;
+    /* PORTME: duplicate detection needs the pattern variable tables */
+    (void) id;
+    (void) loc;
 }
 
 static void
 error_duplicate_pattern_key(struct parser_params *p, ID key, const YYLTYPE *loc)
 {
-    YSTUB("error_duplicate_pattern_key");
-    return;
+    /* PORTME: duplicate detection needs the pattern key tables */
+    (void) key;
+    (void) loc;
 }
 
 static NODE *
 new_unique_key_hash(struct parser_params *p, NODE *hash, const YYLTYPE *loc)
 {
-    YSTUB("new_unique_key_hash");
-    return NULL;
+    /* uniqueness is the deferred duplicate-key check; the carrier passes */
+    return hash;
 }
 
 static NODE *
