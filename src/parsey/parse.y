@@ -1486,6 +1486,7 @@ static void pm_yforward_params(struct parser_params *p, NODE *node, const YYLTYP
 static NODE *pm_ypinned_var(struct parser_params *p, NODE *variable, const YYLTYPE *operator_loc, const YYLTYPE *loc);
 static NODE *pm_ypattern_delims(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static ID pm_ysym_value_id(struct parser_params *p, NODE *node);
+static pm_location_t pm_yclosing(const YYLTYPE *closing);
 static NODE *pm_yistr(struct parser_params *p, NODE *part);
 static NODE *pm_yindex_call(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
@@ -3190,10 +3191,12 @@ command		: fcall command_args       %prec tLOWEST
                 | fcall command_args cmd_brace_block
                     {
                         block_dup_check(p, $2, $3);
-                        YSTUB("grammar"); /* PORTME: $1->nd_args = $2; */
-                        $$ = method_add_block(p, (NODE *)$1, $3, &@$);
+                        {
+                            YYLTYPE call_loc = { @1.beg, @2.end };
+                            $$ = pm_yfcall_args(p, (NODE *)$1, $2, &call_loc);
+                        }
+                        $$ = method_add_block(p, $$, $3, &@$);
                         fixpos($$, RNODE($1));
-                        YSTUB("grammar"); /* PORTME: nd_set_last_loc($1, @2.end_pos); */
                     }
                 | primary_value call_op operation2 command_args	%prec tLOWEST
                     {
@@ -4928,7 +4931,9 @@ p_expr_basic	: p_value
                 | tLPAREN p_pktbl p_expr rparen
                     {
                         pop_pktbl(p, $p_pktbl);
-                        $$ = $p_expr;
+                        $$ = (NODE *) pm_parentheses_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@$),
+                            $p_expr, pm_yloc(&@1), pm_yclosing(&@4));
                     }
                 ;
 
@@ -5148,7 +5153,7 @@ p_expr_ref	: '^' tLPAREN expr_value rparen
                     {
                         $$ = (NODE *) pm_pinned_expression_node_new(
                             p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@$),
-                            $3, pm_yloc(&@1), pm_yloc(&@2), pm_yloc(&@4));
+                            $3, pm_yloc(&@1), pm_yloc(&@2), pm_yclosing(&@4));
                     }
                 ;
 
