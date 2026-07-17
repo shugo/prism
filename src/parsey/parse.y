@@ -10811,10 +10811,12 @@ rb_node_nth_ref_new(struct parser_params *p, long nd_nth, const YYLTYPE *loc)
 static rb_node_back_ref_t *
 rb_node_back_ref_new(struct parser_params *p, long nd_nth, const YYLTYPE *loc)
 {
+    /* The pool keeps pointers, so the two-byte name must not live on the
+     * stack; intern through the copying path. */
     char name[3] = { '$', (char) nd_nth, '\0' };
+    ID id = pm_yid_intern(&p->pm->metadata_arena, &p->pm->constant_pool, (const uint8_t *) name, 2, p->enc);
     return (rb_node_back_ref_t *) pm_back_reference_read_node_new(
-        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
-        pm_constant_pool_insert_constant(&p->pm->metadata_arena, &p->pm->constant_pool, (const uint8_t *) name, 2));
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), YID2CONST(id));
 }
 
 static rb_node_integer_t *
