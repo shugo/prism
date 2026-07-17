@@ -4261,7 +4261,7 @@ block_param_def	: '|' opt_block_param opt_bv_decl '|'
                     {
                         p->max_numparam = ORDINAL_PARAM;
                         p->ctxt.in_argdef = 0;
-                        $$ = pm_yblock_params(p, (NODE *) $2, $3, &@1, &@4);
+                        $$ = pm_yblock_params(p, (NODE *) $2, NULL, &@1, &@4);
                     }
                 ;
 

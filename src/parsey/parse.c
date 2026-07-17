@@ -11378,7 +11378,7 @@ yyreduce:
                     {
                         p->max_numparam = ORDINAL_PARAM;
                         p->ctxt.in_argdef = 0;
-                        (yyval.node_args) = pm_yblock_params(p, (NODE *) (yyvsp[-2].node_args), (yyvsp[-1].id), &(yylsp[-3]), &(yylsp[0]));
+                        (yyval.node_args) = pm_yblock_params(p, (NODE *) (yyvsp[-2].node_args), NULL, &(yylsp[-3]), &(yylsp[0]));
                     }
 #line 11384 "parse.c"
     break;
