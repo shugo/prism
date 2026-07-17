@@ -492,10 +492,10 @@ struct rb_args_info;
 #define ruby_verbose 0
 #define FIXNUM_MAX (LONG_MAX >> 1)
 
-/* Symbol-string round trips. The rb_id2str direction needs the constant pool
- * consulted in reverse and arrives with the symbol port; until then symbol
- * strings are absent rather than wrong. */
-#define rb_id2str(id) ((void) (id), (rb_parser_string_t *) 0)
+/* Symbol-string round trips: the ID's spelling, as a fresh ystring the
+ * caller owns. Defined after the pool helpers; the macro carries `p`. */
+static rb_parser_string_t *pm_yid2str(struct parser_params *p, ID id);
+#define rb_id2str(id) pm_yid2str(p, (id))
 #define rb_id2name(id) ((void) (id), "")
 #define rb_sym2id(str) ((str) ? rb_intern3(PM_YSTRING_PTR(str), PM_YSTRING_LEN(str), p->enc) : 0)
 #define rb_intern_str(str) rb_sym2id(str)
@@ -1395,6 +1395,8 @@ static NODE *pm_yelse(struct parser_params *p, NODE *body, const YYLTYPE *else_l
 static NODE *pm_yarray_brackets(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static NODE *pm_ybegin_keywords(struct parser_params *p, NODE *node, const YYLTYPE *begin_loc, const YYLTYPE *end_loc);
 static NODE *pm_yparentheses(struct parser_params *p, NODE *body, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
+static void pm_ydef_head(struct parser_params *p, NODE *node, const YYLTYPE *def_loc, const YYLTYPE *operator_loc, const YYLTYPE *name_loc);
+static NODE *pm_ydef_finish(struct parser_params *p, NODE *node, NODE *args, NODE *body, const YYLTYPE *loc, const YYLTYPE *end_loc);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
 static rb_node_xstr_t *rb_node_xstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -2626,7 +2628,7 @@ program		:  {
 
 top_stmts	: none
                     {
-                        $$ = NEW_BEGIN(0, &@$);
+                        $$ = 0;
                     }
                 | top_stmt
                     {
@@ -2690,7 +2692,9 @@ bodystmt	: compstmt(stmts)[body]
 
 stmts		: none
                     {
-                        $$ = NEW_BEGIN(0, &@$);
+                        /* CRuby: an empty NODE_BEGIN as the empty-statements
+                         * marker; prism's representation is simply no node. */
+                        $$ = 0;
                     }
                 | stmt_or_begin
                     {
@@ -2919,6 +2923,7 @@ defn_head	: k_def def_name
                         $$ = def_head_save(p, $k_def);
                         $$->nd_mid = $def_name;
                         $$->nd_def = NEW_DEFN($def_name, 0, &@$);
+                        pm_ydef_head(p, $$->nd_def, &@k_def, NULL, &@def_name);
                     }
                 ;
 
@@ -2932,6 +2937,7 @@ defs_head	: k_def singleton dot_or_colon
                         $$ = def_head_save(p, $k_def);
                         $$->nd_mid = $def_name;
                         $$->nd_def = NEW_DEFS($singleton, $def_name, 0, &@$);
+                        pm_ydef_head(p, $$->nd_def, &@k_def, &@dot_or_colon, &@def_name);
                     }
                 ;
 
@@ -3913,9 +3919,7 @@ primary		: inline_primary
               k_end
                 {
                     restore_defun(p, $head);
-                    YSTUB("grammar"); /* PORTME: ($$ = $head->nd_def)->nd_loc = @$; */
-                    $bodystmt = new_scope_body(p, $args, $bodystmt, $$, &@$);
-                    YSTUB("grammar"); /* PORTME: RNODE_DEFN($$)->nd_defn = $bodystmt; */
+                    $$ = pm_ydef_finish(p, (NODE *) $head->nd_def, (NODE *) $args, $bodystmt, &@$, &@k_end);
                     local_pop(p);
                 }
             | defs_head[head]
@@ -3926,9 +3930,7 @@ primary		: inline_primary
               k_end
                 {
                     restore_defun(p, $head);
-                    YSTUB("grammar"); /* PORTME: ($$ = $head->nd_def)->nd_loc = @$; */
-                    $bodystmt = new_scope_body(p, $args, $bodystmt, $$, &@$);
-                    YSTUB("grammar"); /* PORTME: RNODE_DEFS($$)->nd_defn = $bodystmt; */
+                    $$ = pm_ydef_finish(p, (NODE *) $head->nd_def, (NODE *) $args, $bodystmt, &@$, &@k_end);
                     local_pop(p);
                 }
             | keyword_break[kw]
@@ -5299,6 +5301,7 @@ f_empty_arg	: /* none */
 f_paren_args	: '(' f_args rparen
                     {
                         $$ = $2;
+                        pm_yparens_set(p, &@1, &@3);
                         SET_LEX_STATE(EXPR_BEG);
                         p->command_start = TRUE;
                         p->ctxt.in_argdef = 0;
@@ -9737,12 +9740,87 @@ pm_yfcall_args(struct parser_params *p, NODE *node, NODE *args, const YYLTYPE *l
     return node;
 }
 
+/* The ID's spelling out of the constant pool (or the operator name table),
+ * as an owned ystring. */
+static rb_parser_string_t *
+pm_yid2str(struct parser_params *p, ID id)
+{
+    const char *op = pm_yid_op_name(id);
+    if (op != NULL) return pm_ystring_new(op, (long) strlen(op), p->enc);
+
+    pm_constant_id_t constant_id = pm_yid2const(p, id);
+    if (constant_id == PM_CONSTANT_ID_UNSET) return NULL;
+
+    pm_constant_t *constant = pm_constant_pool_id_to_constant(&p->pm->constant_pool, constant_id);
+    return pm_ystring_new((const char *) constant->start, (long) constant->length, p->enc);
+}
+
 /* Wrap a body (or NULL) for a node that wants an optional StatementsNode:
  * unlike pm_ystatements_ensure, an absent body stays absent. */
 static pm_statements_node_t *
 pm_ystatements_opt(struct parser_params *p, NODE *body)
 {
     return body == NULL ? NULL : pm_ystatements_ensure(p, body);
+}
+
+/* The current scope's locals as prism's constant list, consuming the
+ * local_tbl the scope machinery built. */
+static pm_constant_id_list_t
+pm_ylocals(struct parser_params *p)
+{
+    pm_constant_id_list_t locals = { 0 };
+    rb_ast_id_table_t *tbl = local_tbl(p);
+
+    if (tbl != NULL) {
+        pm_constant_id_list_init_capacity(&p->pm->metadata_arena, &locals, (size_t) tbl->size);
+        for (int i = 0; i < tbl->size; i++) {
+            pm_constant_id_list_append(&p->pm->metadata_arena, &locals, pm_yid2const(p, tbl->ids[i]));
+        }
+        xfree(tbl);
+    }
+
+    return locals;
+}
+
+/* Fill in a method definition's keyword and name locations, which only the
+ * defn_head/defs_head actions have at hand. */
+static void
+pm_ydef_head(struct parser_params *p, NODE *node, const YYLTYPE *def_loc, const YYLTYPE *operator_loc, const YYLTYPE *name_loc)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_DEF_NODE)) return;
+    pm_def_node_t *def = (pm_def_node_t *) node;
+    def->def_keyword_loc = pm_yloc(def_loc);
+    if (operator_loc != NULL) def->operator_loc = pm_yloc(operator_loc);
+    def->name_loc = pm_yloc(name_loc);
+}
+
+/* Complete a method definition as its body closes: the span, the end keyword,
+ * the body, the scope's locals, and any parameter parentheses. */
+static NODE *
+pm_ydef_finish(struct parser_params *p, NODE *node, NODE *args, NODE *body, const YYLTYPE *loc, const YYLTYPE *end_loc)
+{
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_DEF_NODE)) {
+        YSTUB("pm_ydef_finish");
+        return node;
+    }
+
+    pm_def_node_t *def = (pm_def_node_t *) node;
+    def->base.location = pm_yloc(loc);
+    def->end_keyword_loc = pm_yloc(end_loc);
+    def->body = (pm_node_t *) pm_ystatements_opt(p, body);
+    def->locals = pm_ylocals(p);
+
+    if (args != NULL) {
+        YSTUB("pm_ydef_finish parameters"); /* PORTME: the parameter builders */
+    }
+
+    if (p->yparens.set) {
+        def->lparen_loc = pm_yloc(&p->yparens.opening);
+        def->rparen_loc = pm_yloc(&p->yparens.closing);
+        p->yparens.set = 0;
+    }
+
+    return node;
 }
 
 /* An else clause, built at the opt_else reduction, which is the last moment
@@ -9859,16 +9937,7 @@ pm_ystatements_ensure(struct parser_params *p, NODE *node)
 static rb_node_scope_t *
 rb_node_scope_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_body, NODE *nd_parent, const YYLTYPE *loc)
 {
-    rb_ast_id_table_t *tbl = local_tbl(p);
-    pm_constant_id_list_t locals = { 0 };
-
-    if (tbl != NULL) {
-        pm_constant_id_list_init_capacity(&p->pm->metadata_arena, &locals, (size_t) tbl->size);
-        for (int i = 0; i < tbl->size; i++) {
-            pm_constant_id_list_append(&p->pm->metadata_arena, &locals, pm_yid_to_constant(&p->pm->metadata_arena, &p->pm->constant_pool, tbl->ids[i]));
-        }
-        xfree(tbl);
-    }
+    pm_constant_id_list_t locals = pm_ylocals(p);
 
     if (nd_args != NULL || nd_parent != NULL) {
         /* Class/module/def scopes arrive with their node ports. */
@@ -9889,15 +9958,23 @@ rb_node_scope_new2(struct parser_params *p, rb_ast_id_table_t *nd_tbl, rb_node_a
 static rb_node_defn_t *
 rb_node_defn_new(struct parser_params *p, ID nd_mid, NODE *nd_defn, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_defn_new");
-    return NULL;
+    (void) nd_defn;
+    pm_location_t zero = { 0 };
+    return (rb_node_defn_t *) pm_def_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        YID2CONST(nd_mid), zero, NULL, NULL, NULL, (pm_constant_id_list_t) { 0 },
+        zero, zero, zero, zero, zero, zero);
 }
 
 static rb_node_defs_t *
 rb_node_defs_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd_defn, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_defs_new");
-    return NULL;
+    (void) nd_defn;
+    pm_location_t zero = { 0 };
+    return (rb_node_defs_t *) pm_def_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        YID2CONST(nd_mid), zero, nd_recv, NULL, NULL, (pm_constant_id_list_t) { 0 },
+        zero, zero, zero, zero, zero, zero);
 }
 
 static rb_node_block_t *
@@ -10463,8 +10540,24 @@ rb_node_dxstr_new(struct parser_params *p, rb_parser_string_t *string, long nd_a
 static rb_node_sym_t *
 rb_node_sym_new(struct parser_params *p, rb_parser_string_t *str, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_sym_new");
-    return NULL;
+    pm_location_t location = pm_yloc(loc);
+    pm_location_t opening_loc = { 0 };
+    pm_location_t value_loc = location;
+
+    if (location.length > 0 && p->pm->start[location.start] == ':') {
+        opening_loc = (pm_location_t) { location.start, 1 };
+        value_loc = (pm_location_t) { location.start + 1, location.length - 1 };
+    }
+
+    pm_node_flags_t flags = PM_NODE_FLAG_STATIC_LITERAL;
+    if (str == NULL || pm_ystring_coderange(str) == PM_YSTRING_CODERANGE_7BIT) {
+        flags |= PM_SYMBOL_FLAGS_FORCED_US_ASCII_ENCODING;
+    }
+
+    return (rb_node_sym_t *) pm_symbol_node_new(
+        p->pm->arena, ++p->pm->node_id, flags, location,
+        opening_loc, value_loc, (pm_location_t) { 0 },
+        str == NULL ? PM_STRING_EMPTY : pm_ystr_take(p, str));
 }
 
 static rb_node_dsym_t *
@@ -11144,8 +11237,21 @@ str_to_sym_node(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 static NODE*
 symbol_append(struct parser_params *p, NODE *symbols, NODE *symbol)
 {
-    YSTUB("symbol_append");
-    return NULL;
+    if (symbol != NULL && PM_NODE_TYPE_P(symbol, PM_STRING_NODE)) {
+        pm_string_node_t *string = (pm_string_node_t *) symbol;
+        pm_node_flags_t flags = PM_NODE_FLAG_STATIC_LITERAL;
+        if (pm_string_length(&string->unescaped) == 0 || pm_ystring_coderange_scan((const char *) pm_string_source(&string->unescaped), (long) pm_string_length(&string->unescaped), p->enc) == PM_YSTRING_CODERANGE_7BIT) {
+            flags |= PM_SYMBOL_FLAGS_FORCED_US_ASCII_ENCODING;
+        }
+        symbol = (NODE *) pm_symbol_node_new(
+            p->pm->arena, ++p->pm->node_id, flags, string->base.location,
+            (pm_location_t) { 0 }, string->content_loc, (pm_location_t) { 0 },
+            string->unescaped);
+    }
+    else {
+        YSTUB("symbol_append");
+    }
+    return list_append(p, symbols, symbol);
 }
 
 static void
@@ -11672,6 +11778,7 @@ args_info_empty_p(struct rb_args_info *args)
 static rb_node_args_t *
 new_args(struct parser_params *p, rb_node_args_aux_t *pre_args, rb_node_opt_arg_t *opt_args, ID rest_arg, rb_node_args_aux_t *post_args, rb_node_args_t *tail, const YYLTYPE *loc)
 {
+    if (pre_args == NULL && opt_args == NULL && rest_arg == 0 && post_args == NULL && tail == NULL) return NULL;
     YSTUB("new_args");
     return NULL;
 }
@@ -11679,6 +11786,7 @@ new_args(struct parser_params *p, rb_node_args_aux_t *pre_args, rb_node_opt_arg_
 static rb_node_args_t *
 new_args_tail(struct parser_params *p, rb_node_kw_arg_t *kw_args, ID kw_rest_arg, ID block, const YYLTYPE *kw_rest_loc)
 {
+    if (kw_args == NULL && kw_rest_arg == 0 && block == 0) return NULL;
     YSTUB("new_args_tail");
     return NULL;
 }
@@ -11830,8 +11938,9 @@ const_decl(struct parser_params *p, NODE *path, const YYLTYPE *loc)
 static NODE *
 new_bodystmt(struct parser_params *p, NODE *head, NODE *rescue, NODE *rescue_else, NODE *ensure, const YYLTYPE *loc)
 {
-    YSTUB("new_bodystmt");
-    return NULL;
+    if (rescue == NULL && rescue_else == NULL && ensure == NULL) return head;
+    YSTUB("new_bodystmt"); /* PORTME: rescue/else/ensure clauses */
+    return head;
 }
 
 static void
