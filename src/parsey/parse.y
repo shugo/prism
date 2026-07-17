@@ -74,6 +74,7 @@
 #include "prism/internal/line_offset_list.h"
 #include "prism/internal/node.h"
 #include "prism/internal/parser.h"
+#include "prism/internal/stringy.h"
 
 #include "prism/ast.h"
 
@@ -1362,6 +1363,7 @@ static rb_node_float_t * rb_node_float_new(struct parser_params *p, char* val, c
 static rb_node_rational_t * rb_node_rational_new(struct parser_params *p, char* val, int base, int seen_point, const YYLTYPE *loc);
 static rb_node_imaginary_t * rb_node_imaginary_new(struct parser_params *p, char* val, int base, int seen_point, enum rb_numeric_type, const YYLTYPE *loc);
 static rb_node_str_t *rb_node_str_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
+static NODE *string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
 static rb_node_xstr_t *rb_node_xstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -4961,7 +4963,7 @@ string		: tCHAR
 string1		: tSTRING_BEG string_contents tSTRING_END
                     {
                         $$ = heredoc_dedent(p, $2);
-                        if ($$) nd_set_loc($$, &@$);
+                        $$ = string_literal_quotes(p, $$, &@1, &@3, &@$);
                         if (p->heredoc_indent > 0) {
                             p->heredoc_indent = 0;
                         }
@@ -5747,8 +5749,23 @@ do { \
 #define has_delayed_token(p) (p->delayed.token != NULL)
 
 #define literal_flush(p, ptr) ((p)->lex.ptok = (ptr))
-#define dispatch_scan_event(p, t) ((void) 0)
+#define dispatch_scan_event(p, t) parser_dispatch_scan_event(p, t)
 #define dispatch_delayed_token(p, t) ((void) 0)
+
+/*
+ * The half of CRuby's parser_dispatch_scan_event that is not about ripper or
+ * kept tokens: publishing the token's location to the parser and flushing the
+ * token start. Without this, every @N in the grammar is empty.
+ */
+static void
+parser_dispatch_scan_event(struct parser_params *p, enum yytokentype t)
+{
+    (void) t;
+    if (p->lex.pcur <= p->lex.ptok) return;
+
+    RUBY_SET_YYLLOC(*p->yylloc);
+    token_flush(p);
+}
 #define add_delayed_token(p, tok, end) ((void) 0)
 #define dispatch_heredoc_end(p) ((void) 0)
 
@@ -7254,6 +7271,7 @@ dedent_string(struct parser_params *p, rb_parser_string_t *string, int width)
 static NODE *
 heredoc_dedent(struct parser_params *p, NODE *root)
 {
+    if (p->heredoc_indent <= 0) return root;
     YSTUB("heredoc_dedent");
     return root;
 }
@@ -9492,6 +9510,65 @@ pm_yloc(const YYLTYPE *loc)
     return (pm_location_t) { loc->beg, loc->end - loc->beg };
 }
 
+/*
+ * Take ownership of a lexer-built string's bytes as a node-held pm_string_t:
+ * copied into the arena the node lives in, which is the convention prism's
+ * own string nodes follow (nodes never hold heap-owned strings). The ystring
+ * is consumed.
+ */
+static pm_string_t
+pm_ystr_take(struct parser_params *p, rb_parser_string_t *str)
+{
+    pm_string_t result;
+
+    if (str == NULL || str->len == 0) {
+        result = PM_STRING_EMPTY;
+    }
+    else {
+        uint8_t *bytes = (uint8_t *) pm_arena_alloc(p->pm->arena, (size_t) str->len, 1);
+        memcpy(bytes, str->ptr, (size_t) str->len);
+        pm_string_constant_init(&result, (const char *) bytes, (size_t) str->len);
+    }
+
+    pm_ystring_free(str);
+    return result;
+}
+
+/*
+ * Attach the quote locations to a string-family literal once the closing
+ * token is known; the constructor only sees the content. Called from the
+ * string1 action, which is where CRuby re-locates the node too.
+ */
+static NODE *
+string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing, const YYLTYPE *loc)
+{
+    if (node == NULL) {
+        /* Empty contents: the node carries a zero-width content location
+         * between the quotes, as the hand-written parser produces. */
+        pm_location_t content_loc = { opening->end, closing->beg - opening->end };
+        node = (NODE *) pm_string_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, content_loc,
+            (pm_location_t) { 0 }, content_loc, (pm_location_t) { 0 },
+            PM_STRING_EMPTY);
+    }
+
+    if (PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
+        pm_string_node_t *string = (pm_string_node_t *) node;
+        string->opening_loc = pm_yloc(opening);
+        string->closing_loc = pm_yloc(closing);
+        /* The lexer hands content over a line at a time, so the node's own
+         * content location can cover just the last chunk; the full span is
+         * everything between the quotes. */
+        string->content_loc = (pm_location_t) { opening->end, closing->beg - opening->end };
+        string->base.location = pm_yloc(loc);
+    }
+    else {
+        YSTUB("string_literal_quotes");
+    }
+
+    return node;
+}
+
 /* Mirror of prism.c's pm_integer_arena_move (static there): a parsed integer
  * that spilled to the heap moves into the arena the node lives in. */
 static void
@@ -10033,8 +10110,11 @@ rb_node_imaginary_new(struct parser_params *p, char* val, int base, int seen_poi
 static rb_node_str_t *
 rb_node_str_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_str_new");
-    return NULL;
+    pm_location_t content_loc = pm_yloc(loc);
+    return (rb_node_str_t *) pm_string_node_new(
+        p->pm->arena, ++p->pm->node_id, 0, content_loc,
+        (pm_location_t) { 0 }, content_loc, (pm_location_t) { 0 },
+        pm_ystr_take(p, string));
 }
 
 /* TODO; Use union for NODE_DSTR2 */
@@ -10437,8 +10517,10 @@ string_literal_head(struct parser_params *p, enum node_type htype, NODE *head)
 static NODE *
 literal_concat(struct parser_params *p, NODE *head, NODE *tail, const YYLTYPE *loc)
 {
+    if (head == NULL) return tail;
+    if (tail == NULL) return head;
     YSTUB("literal_concat");
-    return NULL;
+    return head;
 }
 
 static void
@@ -10464,8 +10546,9 @@ str2regx(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc, c
 static NODE *
 evstr2dstr(struct parser_params *p, NODE *node)
 {
+    if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) return node;
     YSTUB("evstr2dstr");
-    return NULL;
+    return node;
 }
 
 static NODE *
