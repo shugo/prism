@@ -1444,7 +1444,7 @@ static void token_info_pop(struct parser_params*, const char *token, const rb_co
 static void token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_beg, int same, const rb_code_location_t *loc);
 static void token_info_drop(struct parser_params *p, const char *token, rb_code_position_t beg_pos);
 
-#define compile_for_eval	(0)
+#define compile_for_eval	(p->pm->parsing_eval)
 
 #define token_column		((int)(p->lex.ptok - p->lex.pbeg))
 
@@ -18471,10 +18471,74 @@ pm_yid2const(struct parser_params *p, ID id)
 }
 #define YID2CONST(id) pm_yid2const(p, (id))
 
+/* --- eval scopes ---------------------------------------------------------
+ *
+ * When source is parsed as an eval (the scopes option), pm_parser_init has
+ * already pushed the surrounding scopes onto p->pm->current_scope, innermost
+ * on top. These lookups are the fork's version of what upstream asks of
+ * parent_iseq: whether a name is a local variable somewhere outside, and how
+ * far out it lives. The eval's own top level shares a depth level with the
+ * innermost given scope, because the hand-written parser parses eval code
+ * directly into that scope. */
+
+static bool
+pm_yeval_scope_local_p(struct parser_params *p, const pm_scope_t *scope, ID id)
+{
+    pm_constant_id_t name = pm_yid2const(p, id);
+    const pm_locals_t *locals = &scope->locals;
+
+    /* In list mode the entries are the leading slots; in hash mode they are
+     * scattered between unset holes. Unset slots are zeroed either way, so
+     * scanning the whole capacity is correct for both. */
+    for (uint32_t i = 0; i < locals->capacity; i++) {
+        if (locals->locals[i].name == name) return true;
+    }
+    return false;
+}
+
+/* Whether the given scopes forward an anonymous parameter: the counterpart of
+ * finding idFWD_* in an args vtable, matching the hand parser's
+ * pm_parser_scope_forwarding_param_check walk (a flag anywhere up to and
+ * including the first closed scope counts). */
+static bool
+pm_yeval_forwarding_defined(struct parser_params *p, ID arg)
+{
+    pm_scope_parameters_t mask;
+    if (arg == idFWD_REST) mask = PM_SCOPE_PARAMETERS_FORWARDING_POSITIONALS;
+    else if (arg == idFWD_KWREST) mask = PM_SCOPE_PARAMETERS_FORWARDING_KEYWORDS;
+    else if (arg == idFWD_BLOCK) mask = PM_SCOPE_PARAMETERS_FORWARDING_BLOCK;
+    else if (arg == idFWD_ALL) mask = PM_SCOPE_PARAMETERS_FORWARDING_ALL;
+    else return false;
+
+    for (const pm_scope_t *scope = p->pm->current_scope; scope != NULL; scope = scope->previous) {
+        if (scope->parameters & mask) return true;
+        if (scope->closed) break;
+    }
+    return false;
+}
+
+static bool
+pm_yeval_local_defined(struct parser_params *p, ID id)
+{
+    /* the anonymous forwarding markers live in the scopes' parameter flags,
+     * not in their local tables (local_id() reaches here for `...` through
+     * check_forwarding_args) */
+    if (id == idFWD_REST || id == idFWD_KWREST || id == idFWD_BLOCK || id == idFWD_ALL) {
+        return pm_yeval_forwarding_defined(p, id);
+    }
+
+    for (const pm_scope_t *scope = p->pm->current_scope; scope != NULL; scope = scope->previous) {
+        if (pm_yeval_scope_local_p(p, scope, id)) return true;
+    }
+    return false;
+}
+
 /*
  * The depth of a block-local variable: how many enclosing block scopes up its
  * declaration lives, which is what prism's read/write nodes carry and CRuby's
- * nodes recompute at compile time.
+ * nodes recompute at compile time. Names living in the scopes an eval was
+ * given resolve past the eval's top level, whose own table shares its depth
+ * level with the innermost given scope.
  */
 static uint32_t
 pm_ydvar_depth(struct parser_params *p, ID id)
@@ -18489,6 +18553,13 @@ pm_ydvar_depth(struct parser_params *p, ID id)
         vars = vars->prev;
         if (args != NULL) args = args->prev;
         depth++;
+    }
+
+    if (vars == DVARS_INHERIT && depth > 0) {
+        uint32_t extra = 0;
+        for (const pm_scope_t *scope = p->pm->current_scope; scope != NULL; scope = scope->previous, extra++) {
+            if (pm_yeval_scope_local_p(p, scope, id)) return depth - 1 + extra;
+        }
     }
 
     return 0;
@@ -19651,6 +19722,30 @@ static rb_node_scope_t *
 rb_node_scope_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_body, NODE *nd_parent, const YYLTYPE *loc)
 {
     pm_constant_id_list_t locals = pm_ylocals(p);
+
+    /* An eval's top level shares its scope with the innermost given scope
+     * (the hand parser parses eval code directly into it), so the program's
+     * locals lead with that scope's names in their given order, followed by
+     * the ones this parse declared. */
+    if (p->pm->parsing_eval && p->pm->current_scope != NULL) {
+        const pm_locals_t *outer = &p->pm->current_scope->locals;
+        pm_constant_id_list_t combined = { 0 };
+        pm_constant_id_list_init_capacity(&p->pm->metadata_arena, &combined, (size_t) outer->size + locals.size);
+
+        for (uint32_t index = 0; index < outer->size; index++) {
+            for (uint32_t slot = 0; slot < outer->capacity; slot++) {
+                const pm_local_t *local = &outer->locals[slot];
+                if (local->name != PM_CONSTANT_ID_UNSET && local->index == index) {
+                    pm_constant_id_list_append(&p->pm->metadata_arena, &combined, local->name);
+                    break;
+                }
+            }
+        }
+        for (size_t index = 0; index < locals.size; index++) {
+            pm_constant_id_list_append(&p->pm->metadata_arena, &combined, locals.ids[index]);
+        }
+        locals = combined;
+    }
 
     if (nd_args != NULL || nd_parent != NULL) {
         /* Class/module/def scopes arrive with their node ports. */
@@ -23398,8 +23493,8 @@ local_var(struct parser_params *p, ID id)
 static int
 rb_parser_local_defined(struct parser_params *p, ID id, const struct rb_iseq_struct *iseq)
 {
-    /* PORTME: outer eval scopes arrive with the scopes option */
-    return 0;
+    (void) iseq;
+    return pm_yeval_local_defined(p, id);
 }
 
 static int
@@ -23418,7 +23513,7 @@ local_id_ref(struct parser_params *p, ID id, ID **vidrefp)
     }
 
     if (vars && vars->prev == DVARS_INHERIT) {
-        return 0; /* PORTME: outer eval scopes arrive with the scopes option */
+        return pm_yeval_local_defined(p, id);
     }
     else if (vtable_included(args, id)) {
         return 1;
@@ -23470,8 +23565,9 @@ forwarding_arg_check(struct parser_params *p, ID arg, ID all, const char *var)
     }
 
     bool found = false;
-    if (vars && vars->prev == DVARS_INHERIT && !found) {
-        found = 0; /* PORTME: outer eval scopes arrive with the scopes option */
+    if (vars && vars->prev == DVARS_INHERIT) {
+        found = pm_yeval_forwarding_defined(p, arg) &&
+                !(all && pm_yeval_forwarding_defined(p, all));
     }
     else {
         found = (vtable_included(args, arg) &&
@@ -23619,7 +23715,7 @@ dvar_defined_ref(struct parser_params *p, ID id, ID **vidrefp)
     }
 
     if (vars == DVARS_INHERIT && !NUMPARAM_ID_P(id)) {
-        return 0; /* PORTME: outer eval scopes arrive with the scopes option */
+        return pm_yeval_local_defined(p, id);
     }
 
     return 0;

@@ -46,6 +46,54 @@ module Prism
       end
     end
 
+    # The scopes option (eval parsing): outer locals must resolve with the
+    # same node types and depths, new locals must land in the right scope,
+    # and anonymous-parameter forwarding flags must be honored.
+    SCOPE_CASES = [
+      ["a", [[:a]]],
+      ["a", [[:a], [:b]]],
+      ["b", [[:a], [:b]]],
+      ["a = 1", [[:a]]],
+      ["x = 1", [[]]],
+      ["x = 1; y = x", [[:a]]],
+      ["proc { a }", [[:a], [:b]]],
+      ["proc { x = a }", [[:a]]],
+      ["proc { proc { a } }", [[:a], [:b]]],
+      ["yield", [[]]],
+      ["defined?(a)", [[:a]]],
+      ["def m; a; end", [[:a]]],
+      ["a = a + 1", [[:a]]],
+      ["a += 1", [[:a]]],
+      ["a, b = 1, 2", [[:a]]],
+      ["tap { it }", [[]]],
+      ["return", [[]]],
+      ["super", [[]]],
+      ["for a in b; end", [[:a], [:b]]],
+      ["begin; rescue => a; end", [[:a]]],
+      ["/(?<a>x)/ =~ s", [[:a]]],
+      ["foo(*)", [Prism.scope(locals: [], forwarding: [:*])]],
+      ["foo(**)", [Prism.scope(locals: [], forwarding: [:**])]],
+      ["foo(&)", [Prism.scope(locals: [], forwarding: [:&])]],
+      ["foo(...)", [Prism.scope(locals: [], forwarding: [:"..."])]],
+      ["foo(*)", [Prism.scope(locals: [], forwarding: [:"..."])]],
+      ["bar(*)", [Prism.scope(locals: [:x], forwarding: [:*]), Prism.scope(locals: [], forwarding: [])]]
+    ].freeze
+
+    SCOPE_CASES.each_with_index do |(source, scopes), index|
+      define_method(:"test_scopes_#{index}_#{source.gsub(/\W+/, "_")}") do
+        hand = Prism.parse(source, scopes: scopes)
+        parsey = Prism.parse(source, scopes: scopes, backend: :parse_y)
+
+        if hand.errors.any?
+          assert parsey.errors.any?, "#{source.inspect}: parse_y accepts source the hand-written parser rejects"
+        else
+          assert_empty parsey.errors.map(&:message)
+          assert_equal hand.value.inspect, parsey.value.inspect
+          assert_equal warning_signature(hand), warning_signature(parsey)
+        end
+      end
+    end
+
     private
 
     def warning_signature(result)
