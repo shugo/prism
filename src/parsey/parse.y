@@ -278,14 +278,39 @@ typedef struct rb_ast_id_table {
     ID ids[FLEX_ARY_LEN];
 } rb_ast_id_table_t;
 
-/* The hash tables the parser keys by name or literal (pattern variable
- * tables, duplicate-key warnings, case/when labels). Everything that touches
- * them is behind stubs until those features are ported, so the type is
- * opaque and the operations are inert. */
-typedef struct pm_yst_table st_table;
+/* The tables the parser keys by ID (pattern variable and key tables). The
+ * grammar only ever asks for membership and insertion of a handful of
+ * entries per pattern, so a growable array stands in for CRuby's st. The
+ * storage comes from the metadata arena: the saved outer table rides the
+ * value stack across a pattern, where error recovery would strand a malloc
+ * (the arena outlives the parse either way). */
 typedef uintptr_t st_data_t;
 typedef int st_index_t;
+typedef struct pm_yst_table {
+    st_data_t *entries;
+    size_t size;
+    size_t capacity;
+} st_table;
+
+static st_table *
+pm_yst_init(struct parser_params *p);
+
+static int
+st_is_member(const st_table *table, st_data_t key)
+{
+    if (table == NULL) return 0;
+    for (size_t i = 0; i < table->size; i++) {
+        if (table->entries[i] == key) return 1;
+    }
+    return 0;
+}
+
+/* Returns nonzero if the key was already present, like CRuby's st_insert. */
+static int
+pm_yst_insert(struct parser_params *p, st_table *table, st_data_t key);
+
 #define st_free_table(table) ((void) (table))
+#define st_insert(table, key, value) pm_yst_insert(p, (table), (key))
 
 /* Interning. The second argument to pm_yid_intern is the constant pool the
  * prism parser owns; `p` is in scope at every use site, as it is for CRuby's
@@ -360,6 +385,8 @@ typedef struct rb_strterm_literal_struct {
     int term;	    /* ')' of `%q(...)` */
     uint32_t yopener_beg;	/* fork: heredoc opener span, reported as the */
     uint32_t yopener_end;	/* deferred END token's location */
+    uint32_t ybeg;		/* fork: span of the literal's opening */
+    uint32_t yend;		/* delimiter, for unterminated diagnostics */
 } rb_strterm_literal_t;
 
 typedef struct rb_strterm_heredoc_struct {
@@ -526,8 +553,7 @@ nd_unset_fl_newline(NODE *n)
     n->flags &= (pm_node_flags_t) ~PM_NODE_FLAG_NEWLINE;
 }
 
-/* The pattern-matching duplicate tables arrive with the pattern port. */
-#define st_init_numtable() NULL
+#define st_init_numtable() pm_yst_init(p)
 
 /* Debug/fatal surface. */
 #define rb_parser_printf(p, ...) ((void) 0)
@@ -1164,6 +1190,29 @@ static inline int
 char_at_end(struct parser_params *p, VALUE str, int when_empty)
 {
     return when_empty;
+}
+
+static st_table *
+pm_yst_init(struct parser_params *p)
+{
+    st_table *table = (st_table *) pm_arena_alloc(&p->pm->metadata_arena, sizeof(st_table), PRISM_ALIGNOF(st_table));
+    *table = (st_table) { 0 };
+    return table;
+}
+
+static int
+pm_yst_insert(struct parser_params *p, st_table *table, st_data_t key)
+{
+    if (st_is_member(table, key)) return 1;
+    if (table->size == table->capacity) {
+        size_t capacity = table->capacity == 0 ? 8 : table->capacity * 2;
+        st_data_t *entries = (st_data_t *) pm_arena_alloc(&p->pm->metadata_arena, capacity * sizeof(st_data_t), PRISM_ALIGNOF(st_data_t));
+        memcpy(entries, table->entries, table->size * sizeof(st_data_t));
+        table->entries = entries;
+        table->capacity = capacity;
+    }
+    table->entries[table->size++] = key;
+    return 0;
 }
 
 static void
@@ -2239,7 +2288,15 @@ get_nd_vid(struct parser_params *p, NODE *node)
 static NODE *
 get_nd_args(struct parser_params *p, NODE *node)
 {
-    /* PORTME: returns the call's arguments once block-pass is ported */
+    if (node != NULL && PM_NODE_TYPE_P(node, PM_CALL_NODE)) {
+        pm_call_node_t *cast = (pm_call_node_t *) node;
+        /* upstream's nd_args keeps the BLOCK_PASS wrapper; the fork's calls
+         * carry a consumed block argument in the block field */
+        if (cast->block != NULL && PM_NODE_TYPE_P(cast->block, PM_BLOCK_ARGUMENT_NODE)) {
+            return cast->block;
+        }
+        return (NODE *) cast->arguments;
+    }
     return NULL;
 }
 
@@ -4428,6 +4485,7 @@ f_marg		: f_norm_arg
                     {
                         /* fork: group members are parameters; the args table
                          * keeps the scope's locals in declaration order */
+                        p->ylvar_beg = @1.beg;
                         arg_var(p, $1);
                         $$ = assignable(p, $1, 0, &@$);
                         mark_lvar_used(p, $$);
@@ -4465,6 +4523,7 @@ f_margs		: mlhs_items(f_marg)
 f_rest_marg	: tSTAR f_norm_arg
                     {
                         /* fork: as f_marg, the args table keeps order */
+                        p->ylvar_beg = @2.beg;
                         arg_var(p, $2);
                         $$ = assignable(p, $2, 0, &@$);
                         mark_lvar_used(p, $$);
@@ -5755,25 +5814,25 @@ args_forward	: tBDOT3
 
 f_bad_arg	: tCONSTANT
                     {
-                        static const char mesg[] = "formal argument cannot be a constant";
+                        static const char mesg[] = "invalid formal argument; formal argument cannot be a constant";
                         yyerror1(&@1, mesg);
                         $$ = 0;
                     }
                 | tIVAR
                     {
-                        static const char mesg[] = "formal argument cannot be an instance variable";
+                        static const char mesg[] = "invalid formal argument; formal argument cannot be an instance variable";
                         yyerror1(&@1, mesg);
                         $$ = 0;
                     }
                 | tGVAR
                     {
-                        static const char mesg[] = "formal argument cannot be a global variable";
+                        static const char mesg[] = "invalid formal argument; formal argument cannot be a global variable";
                         yyerror1(&@1, mesg);
                         $$ = 0;
                     }
                 | tCVAR
                     {
-                        static const char mesg[] = "formal argument cannot be a class variable";
+                        static const char mesg[] = "invalid formal argument; formal argument cannot be a class variable";
                         yyerror1(&@1, mesg);
                         $$ = 0;
                     }
@@ -5791,6 +5850,7 @@ f_norm_arg	: f_bad_arg
 
 f_arg_asgn	: f_norm_arg
                     {
+                        p->ylvar_beg = @1.beg;
                         arg_var(p, $1);
                         $$ = $1;
                     }
@@ -5843,6 +5903,7 @@ f_label 	: tLABEL
                          *
                          * See the discussion on https://github.com/ruby/ruby/pull/9923
                          */
+                        p->ylvar_beg = @1.beg;
                         arg_var(p, ifdef_ripper(0, $1));
                         p->max_numparam = ORDINAL_PARAM;
                         p->ctxt.in_argdef = 0;
@@ -5860,6 +5921,7 @@ f_no_kwarg	: p_kwnorest
 
 f_kwrest	: kwrest_mark tIDENTIFIER
                     {
+                        p->ylvar_beg = @2.beg;
                         arg_var(p, shadowing_lvar(p, $2));
                         $$ = $2;
                         pm_ymarker_param(p, &p->ykwrest_param, 1, $2, &@1, &@2);
@@ -5878,6 +5940,7 @@ restarg_mark	: '*'
 
 f_rest_arg	: restarg_mark tIDENTIFIER
                     {
+                        p->ylvar_beg = @2.beg;
                         arg_var(p, shadowing_lvar(p, $2));
                         $$ = $2;
                         pm_ymarker_param(p, &p->yrest_param, 0, $2, &@1, &@2);
@@ -5896,12 +5959,23 @@ blkarg_mark	: '&'
 
 f_block_arg	: blkarg_mark tIDENTIFIER
                     {
+                        p->ylvar_beg = @2.beg;
                         arg_var(p, shadowing_lvar(p, $2));
                         $$ = $2;
                         pm_ymarker_param(p, &p->yblock_param, 2, $2, &@1, &@2);
                     }
                 | blkarg_mark keyword_nil
                     {
+                        if (p->pm->version < PM_OPTIONS_VERSION_CRUBY_4_1) {
+                            pm_diagnostic_list_append_format(
+                                &p->pm->metadata_arena, &p->pm->error_list,
+                                @2.beg, @2.end - @2.beg,
+                                PM_ERR_DEF_PARAMS_TERM_PAREN, "'nil'");
+                        }
+                        YYLTYPE full = { @1.beg, @2.end };
+                        p->yblock_param = (NODE *) pm_no_block_parameter_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&full),
+                            pm_yloc(&@1), pm_yloc(&@2));
                         $$ = idNil;
                     }
                 | blkarg_mark
@@ -5922,25 +5996,27 @@ opt_comma	: ','?
 singleton	: value_expr(singleton_expr)
                     {
                         NODE *expr = last_expr_node($1);
-                        switch (nd_type(expr)) {
-                          case NODE_STR:
-                          case NODE_DSTR:
-                          case NODE_XSTR:
-                          case NODE_DXSTR:
-                          case NODE_REGX:
-                          case NODE_DREGX:
-                          case NODE_SYM:
-                          case NODE_LINE:
-                          case NODE_FILE:
-                          case NODE_ENCODING:
-                          case NODE_INTEGER:
-                          case NODE_FLOAT:
-                          case NODE_RATIONAL:
-                          case NODE_IMAGINARY:
-                          case NODE_DSYM:
-                          case NODE_LIST:
-                          case NODE_ZLIST:
-                            YSTUB("grammar"); /* PORTME: yyerror1(&expr->nd_loc, "can't define singleton method for literals"); */
+                        switch (PM_NODE_TYPE(expr)) {
+                          case PM_STRING_NODE:
+                          case PM_INTERPOLATED_STRING_NODE:
+                          case PM_X_STRING_NODE:
+                          case PM_INTERPOLATED_X_STRING_NODE:
+                          case PM_REGULAR_EXPRESSION_NODE:
+                          case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
+                          case PM_SYMBOL_NODE:
+                          case PM_INTERPOLATED_SYMBOL_NODE:
+                          case PM_SOURCE_LINE_NODE:
+                          case PM_SOURCE_FILE_NODE:
+                          case PM_SOURCE_ENCODING_NODE:
+                          case PM_INTEGER_NODE:
+                          case PM_FLOAT_NODE:
+                          case PM_RATIONAL_NODE:
+                          case PM_IMAGINARY_NODE:
+                          case PM_ARRAY_NODE:
+                            pm_diagnostic_list_append_format(
+                                &p->pm->metadata_arena, &p->pm->error_list,
+                                expr->location.start, expr->location.length,
+                                PM_ERR_SINGLETON_FOR_LITERALS);
                             break;
                           default:
                             break;
@@ -6532,6 +6608,8 @@ new_strterm(struct parser_params *p, int func, int term, int paren)
     strterm->u.literal.func = func;
     strterm->u.literal.term = term;
     strterm->u.literal.paren = paren;
+    strterm->u.literal.ybeg = YOFF(p->lex.ptok);
+    strterm->u.literal.yend = YOFF(p->lex.pcur);
     return strterm;
 }
 
@@ -7577,20 +7655,37 @@ parse_string(struct parser_params *p, rb_strterm_literal_t *quote)
     if (tokadd_string(p, func, term, paren, &quote->nest,
                       &enc, &base_enc) == -1) {
         if (p->eofp) {
-# define unterminated_literal(mesg) yyerror0(mesg)
+            /* The messages and anchors mirror the hand-written parser: lists
+             * and regexps point at their opening delimiter, as do plain
+             * non-interpolating strings, while interpolating strings point at
+             * the end of file. */
+# define unterminated_literal(diag_id, beg, len) \
+            pm_diagnostic_list_append_format(&p->pm->metadata_arena, &p->pm->error_list, (beg), (len), diag_id)
             literal_flush(p, p->lex.pcur);
+            uint32_t obeg = quote->ybeg;
+            uint32_t olen = quote->yend - quote->ybeg;
             if (func & STR_FUNC_QWORDS) {
                 /* no content to add, bailing out here */
-                unterminated_literal("unterminated list meets end of file");
+                pm_diagnostic_id_t diag_id;
+                switch (p->pm->start[obeg + 1]) {
+                  case 'w': diag_id = PM_ERR_LIST_W_LOWER_TERM; break;
+                  case 'W': diag_id = PM_ERR_LIST_W_UPPER_TERM; break;
+                  case 'i': diag_id = PM_ERR_LIST_I_LOWER_TERM; break;
+                  default:  diag_id = PM_ERR_LIST_I_UPPER_TERM; break;
+                }
+                unterminated_literal(diag_id, obeg, olen);
                 xfree(p->lex.strterm);
                 p->lex.strterm = 0;
                 return tSTRING_END;
             }
             if (func & STR_FUNC_REGEXP) {
-                unterminated_literal("unterminated regexp meets end of file");
+                unterminated_literal(PM_ERR_REGEXP_TERM, obeg, olen);
+            }
+            else if (func & STR_FUNC_EXPAND) {
+                unterminated_literal(PM_ERR_STRING_LITERAL_EOF, YOFF(p->lex.pcur), 0);
             }
             else {
-                unterminated_literal("unterminated string meets end of file");
+                unterminated_literal(PM_ERR_STRING_LITERAL_EOF, obeg, olen);
             }
             quote->func |= STR_FUNC_TERM;
         }
@@ -8513,7 +8608,13 @@ parse_numeric(struct parser_params *p, int c)
             if (c != -1 && ISXDIGIT(c)) {
                 do {
                     if (c == '_') {
-                        if (nondigit) break;
+                        if (nondigit) {
+                            pm_diagnostic_list_append_format(
+                                &p->pm->metadata_arena, &p->pm->error_list,
+                                YOFF(p->lex.pcur) - 1, 1,
+                                PM_ERR_INVALID_NUMBER_UNDERSCORE_INNER);
+                            continue;
+                        }
                         nondigit = c;
                         continue;
                     }
@@ -8537,7 +8638,13 @@ parse_numeric(struct parser_params *p, int c)
             if (c == '0' || c == '1') {
                 do {
                     if (c == '_') {
-                        if (nondigit) break;
+                        if (nondigit) {
+                            pm_diagnostic_list_append_format(
+                                &p->pm->metadata_arena, &p->pm->error_list,
+                                YOFF(p->lex.pcur) - 1, 1,
+                                PM_ERR_INVALID_NUMBER_UNDERSCORE_INNER);
+                            continue;
+                        }
                         nondigit = c;
                         continue;
                     }
@@ -8561,7 +8668,13 @@ parse_numeric(struct parser_params *p, int c)
             if (c != -1 && ISDIGIT(c)) {
                 do {
                     if (c == '_') {
-                        if (nondigit) break;
+                        if (nondigit) {
+                            pm_diagnostic_list_append_format(
+                                &p->pm->metadata_arena, &p->pm->error_list,
+                                YOFF(p->lex.pcur) - 1, 1,
+                                PM_ERR_INVALID_NUMBER_UNDERSCORE_INNER);
+                            continue;
+                        }
                         nondigit = c;
                         continue;
                     }
@@ -8596,7 +8709,13 @@ parse_numeric(struct parser_params *p, int c)
           octal_number:
             do {
                 if (c == '_') {
-                    if (nondigit) break;
+                    if (nondigit) {
+                        pm_diagnostic_list_append_format(
+                            &p->pm->metadata_arena, &p->pm->error_list,
+                            YOFF(p->lex.pcur) - 1, 1,
+                            PM_ERR_INVALID_NUMBER_UNDERSCORE_INNER);
+                        continue;
+                    }
                     nondigit = c;
                     continue;
                 }
@@ -10564,7 +10683,11 @@ pm_ylocals(struct parser_params *p)
             if (id == idFWD_REST || id == idFWD_KWREST || id == idFWD_BLOCK || id == idFWD_ALL) continue;
             /* the implicit it parameter is not a named local */
             if (id == idItImplicit) continue;
-            pm_constant_id_list_append(&p->pm->metadata_arena, &locals, pm_yid2const(p, id));
+            pm_constant_id_t constant = pm_yid2const(p, id);
+            /* id 0 arrives from error productions (f_bad_arg); a nameless
+             * local cannot be materialized */
+            if (constant == PM_CONSTANT_ID_UNSET) continue;
+            pm_constant_id_list_append(&p->pm->metadata_arena, &locals, constant);
         }
         xfree(tbl);
     }
@@ -11691,6 +11814,9 @@ rb_node_return_new(struct parser_params *p, NODE *nd_stts, const YYLTYPE *loc, c
 static rb_node_yield_t *
 rb_node_yield_new(struct parser_params *p, NODE *nd_head, const YYLTYPE *loc, const YYLTYPE *keyword_loc, const YYLTYPE *lparen_loc, const YYLTYPE *rparen_loc)
 {
+    /* upstream guards with nd_head, whose BLOCK_PASS wrapper is non-null for
+     * `yield(&b)`; here the pending slot carries that case, so always check */
+    no_blockarg(p, nd_head);
     return (rb_node_yield_t *) pm_yield_node_new(
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
         pm_yloc(keyword_loc), pm_yloc(lparen_loc),
@@ -13983,11 +14109,61 @@ new_bv(struct parser_params *p, ID name)
     }
 }
 
+/* The block argument of an argument list, if any: the fork's args carriers
+ * keep it as the last element (upstream wraps the list in NODE_BLOCK_PASS).
+ * `...` counts, since forwarding includes the block. */
+static NODE *
+pm_yargs_block_pass(NODE *args)
+{
+    pm_node_list_t *elements = NULL;
+    if (args == NULL) return NULL;
+    if (PM_NODE_TYPE_P(args, PM_BLOCK_ARGUMENT_NODE)) return args;
+    if (PM_NODE_TYPE_P(args, PM_ARRAY_NODE)) elements = &((pm_array_node_t *) args)->elements;
+    else if (PM_NODE_TYPE_P(args, PM_ARGUMENTS_NODE)) elements = &((pm_arguments_node_t *) args)->arguments;
+    if (elements == NULL || elements->size == 0) return NULL;
+
+    NODE *last = elements->nodes[elements->size - 1];
+    if (last != NULL && (PM_NODE_TYPE_P(last, PM_BLOCK_ARGUMENT_NODE) || PM_NODE_TYPE_P(last, PM_FORWARDING_ARGUMENTS_NODE))) {
+        return last;
+    }
+    return NULL;
+}
+
 static void
 aryset_check(struct parser_params *p, NODE *args)
 {
-    /* PORTME: rejects block/keyword arguments in an index assignment,
-     * which cannot be built until block-pass and kwargs are ported */
+    pm_node_list_t *elements = NULL;
+    NODE *block = pm_yargs_block_pass(args);
+    NODE *kwds = NULL;
+
+    /* the pending-slot pattern: the block argument may not have joined the
+     * carrier yet when the index target reduces */
+    if (block == NULL && p->yblock_pass != NULL && PM_NODE_TYPE_P(p->yblock_pass, PM_BLOCK_ARGUMENT_NODE)) {
+        block = p->yblock_pass;
+    }
+
+    if (args != NULL && PM_NODE_TYPE_P(args, PM_ARRAY_NODE)) elements = &((pm_array_node_t *) args)->elements;
+    else if (args != NULL && PM_NODE_TYPE_P(args, PM_ARGUMENTS_NODE)) elements = &((pm_arguments_node_t *) args)->arguments;
+    if (elements != NULL) {
+        for (size_t i = 0; i < elements->size; i++) {
+            if (elements->nodes[i] != NULL && PM_NODE_TYPE_P(elements->nodes[i], PM_KEYWORD_HASH_NODE)) {
+                kwds = elements->nodes[i];
+            }
+        }
+    }
+
+    if (kwds != NULL) {
+        pm_diagnostic_list_append_format(
+            &p->pm->metadata_arena, &p->pm->error_list,
+            kwds->location.start, kwds->location.length,
+            PM_ERR_UNEXPECTED_INDEX_KEYWORDS);
+    }
+    if (block != NULL && PM_NODE_TYPE_P(block, PM_BLOCK_ARGUMENT_NODE)) {
+        pm_diagnostic_list_append_format(
+            &p->pm->metadata_arena, &p->pm->error_list,
+            block->location.start, block->location.length,
+            PM_ERR_UNEXPECTED_INDEX_BLOCK);
+    }
 }
 
 static NODE *
@@ -14000,7 +14176,12 @@ aryset(struct parser_params *p, NODE *recv, NODE *idx, const YYLTYPE *loc)
 static void
 block_dup_check(struct parser_params *p, NODE *node1, NODE *node2)
 {
-    /* PORTME: block-pass + literal block duplication check */
+    if (node2 && node1 && pm_yargs_block_pass(node1)) {
+        pm_diagnostic_list_append_format(
+            &p->pm->metadata_arena, &p->pm->error_list,
+            node2->location.start, node2->location.length,
+            PM_ERR_ARGUMENT_BLOCK_MULTI);
+    }
 }
 
 static NODE *
@@ -14016,7 +14197,11 @@ attrset(struct parser_params *p, NODE *recv, ID atype, ID id, const YYLTYPE *loc
 static VALUE
 rb_backref_error(struct parser_params *p, NODE *node)
 {
-    YSTUB("rb_backref_error");
+    pm_diagnostic_list_append_format(
+        &p->pm->metadata_arena, &p->pm->error_list,
+        node->location.start, node->location.length,
+        PM_ERR_WRITE_TARGET_READONLY,
+        (int) node->location.length, (const char *) p->pm->start + node->location.start);
     return 0;
 }
 
@@ -14251,38 +14436,184 @@ node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ct
 static NODE *
 value_expr_check(struct parser_params *p, NODE *node)
 {
-    /* Only the mark_lvar_used side effects of upstream's traversal are
-     * ported: an assignment in value position counts as a use of its
-     * variable. The void-value-expression errors the full traversal also
-     * produces are still to come. */
-    while (node) {
+    /* The mirror of the hand-written parser's pm_check_value_expression,
+     * including its version gates, so the void-value-expression errors come
+     * out identical. The LOCAL_VARIABLE_WRITE arm keeps upstream's
+     * mark_lvar_used side effect (an assignment in value position counts as
+     * a use of its variable); MULTI_WRITE rides along because upstream lists
+     * NODE_MASGN there, though the mark is a no-op for it either way. */
+    NODE *void_node = NULL;
+
+#define YCASE_VOID_VALUE PM_RETURN_NODE: case PM_BREAK_NODE: case PM_NEXT_NODE: \
+    case PM_REDO_NODE: case PM_RETRY_NODE: case PM_MATCH_REQUIRED_NODE
+
+    while (node != NULL) {
         switch (PM_NODE_TYPE(node)) {
+          case YCASE_VOID_VALUE:
+            return void_node != NULL ? void_node : node;
+          case PM_MATCH_PREDICATE_NODE:
+            return NULL;
           case PM_BEGIN_NODE: {
             pm_begin_node_t *cast = (pm_begin_node_t *) node;
-            if (cast->statements == NULL || cast->statements->body.size == 0) return NULL;
-            node = cast->statements->body.nodes[cast->statements->body.size - 1];
+
+            if (cast->ensure_clause != NULL) {
+                if (cast->rescue_clause != NULL) {
+                    NODE *vn = value_expr_check(p, (NODE *) cast->rescue_clause);
+                    if (vn != NULL) return vn;
+                }
+
+                if (cast->statements != NULL) {
+                    NODE *vn = value_expr_check(p, (NODE *) cast->statements);
+                    if (vn != NULL) return vn;
+                }
+
+                node = (NODE *) cast->ensure_clause;
+            }
+            else if (cast->rescue_clause != NULL) {
+                /* https://bugs.ruby-lang.org/issues/21669 */
+                if (cast->else_clause == NULL || p->pm->version < PM_OPTIONS_VERSION_CRUBY_4_1) {
+                    if (cast->statements == NULL) return NULL;
+
+                    NODE *vn = value_expr_check(p, (NODE *) cast->statements);
+                    if (vn == NULL) return NULL;
+                    if (void_node == NULL) void_node = vn;
+                }
+
+                for (pm_rescue_node_t *rescue_clause = cast->rescue_clause; rescue_clause != NULL; rescue_clause = rescue_clause->subsequent) {
+                    NODE *vn = value_expr_check(p, (NODE *) rescue_clause->statements);
+
+                    if (vn == NULL) {
+                        /* https://bugs.ruby-lang.org/issues/21669 */
+                        if (p->pm->version >= PM_OPTIONS_VERSION_CRUBY_4_1) {
+                            return NULL;
+                        }
+                        void_node = NULL;
+                        break;
+                    }
+                }
+
+                if (cast->else_clause != NULL) {
+                    node = (NODE *) cast->else_clause;
+
+                    /* https://bugs.ruby-lang.org/issues/21669 */
+                    if (p->pm->version >= PM_OPTIONS_VERSION_CRUBY_4_1) {
+                        NODE *vn = value_expr_check(p, node);
+                        if (vn != NULL) return vn;
+                    }
+                }
+                else {
+                    return void_node;
+                }
+            }
+            else {
+                node = (NODE *) cast->statements;
+            }
+
+            break;
+          }
+          case PM_CASE_NODE: {
+            /* https://bugs.ruby-lang.org/issues/21669 */
+            if (p->pm->version < PM_OPTIONS_VERSION_CRUBY_4_1) {
+                return NULL;
+            }
+
+            pm_case_node_t *cast = (pm_case_node_t *) node;
+            if (cast->else_clause == NULL) return NULL;
+
+            for (size_t index = 0; index < cast->conditions.size; index++) {
+                pm_when_node_t *condition = (pm_when_node_t *) cast->conditions.nodes[index];
+                NODE *vn = value_expr_check(p, (NODE *) condition->statements);
+                if (vn == NULL) return NULL;
+                if (void_node == NULL) void_node = vn;
+            }
+
+            node = (NODE *) cast->else_clause;
+            break;
+          }
+          case PM_CASE_MATCH_NODE: {
+            /* https://bugs.ruby-lang.org/issues/21669 */
+            if (p->pm->version < PM_OPTIONS_VERSION_CRUBY_4_1) {
+                return NULL;
+            }
+
+            pm_case_match_node_t *cast = (pm_case_match_node_t *) node;
+            if (cast->else_clause == NULL) return NULL;
+
+            for (size_t index = 0; index < cast->conditions.size; index++) {
+                pm_in_node_t *condition = (pm_in_node_t *) cast->conditions.nodes[index];
+                NODE *vn = value_expr_check(p, (NODE *) condition->statements);
+                if (vn == NULL) return NULL;
+                if (void_node == NULL) void_node = vn;
+            }
+
+            node = (NODE *) cast->else_clause;
+            break;
+          }
+          case PM_ENSURE_NODE: {
+            pm_ensure_node_t *cast = (pm_ensure_node_t *) node;
+            node = (NODE *) cast->statements;
+            break;
+          }
+          case PM_PARENTHESES_NODE: {
+            pm_parentheses_node_t *cast = (pm_parentheses_node_t *) node;
+            node = cast->body;
+            break;
+          }
+          case PM_STATEMENTS_NODE: {
+            pm_statements_node_t *cast = (pm_statements_node_t *) node;
+            if (cast->body.size == 0) return NULL;
+
+            /* https://bugs.ruby-lang.org/issues/21669 */
+            if (p->pm->version >= PM_OPTIONS_VERSION_CRUBY_4_1) {
+                for (size_t index = 0; index < cast->body.size; index++) {
+                    switch (PM_NODE_TYPE(cast->body.nodes[index])) {
+                      case YCASE_VOID_VALUE:
+                        if (void_node == NULL) {
+                            void_node = cast->body.nodes[index];
+                        }
+                        return void_node;
+                      default:
+                        break;
+                    }
+                }
+            }
+
+            node = cast->body.nodes[cast->body.size - 1];
             break;
           }
           case PM_IF_NODE: {
             pm_if_node_t *cast = (pm_if_node_t *) node;
-            if (cast->statements == NULL || cast->statements->body.size == 0) return NULL;
-            if (cast->subsequent == NULL) return NULL;
-            value_expr_check(p, cast->statements->body.nodes[cast->statements->body.size - 1]);
+            if (cast->statements == NULL || cast->subsequent == NULL) {
+                return NULL;
+            }
+            NODE *vn = value_expr_check(p, (NODE *) cast->statements);
+            if (vn == NULL) {
+                return NULL;
+            }
+            if (void_node == NULL) {
+                void_node = vn;
+            }
             node = cast->subsequent;
             break;
           }
           case PM_UNLESS_NODE: {
             pm_unless_node_t *cast = (pm_unless_node_t *) node;
-            if (cast->statements == NULL || cast->statements->body.size == 0) return NULL;
-            if (cast->else_clause == NULL) return NULL;
-            value_expr_check(p, cast->statements->body.nodes[cast->statements->body.size - 1]);
+            if (cast->statements == NULL || cast->else_clause == NULL) {
+                return NULL;
+            }
+            NODE *vn = value_expr_check(p, (NODE *) cast->statements);
+            if (vn == NULL) {
+                return NULL;
+            }
+            if (void_node == NULL) {
+                void_node = vn;
+            }
             node = (NODE *) cast->else_clause;
             break;
           }
           case PM_ELSE_NODE: {
             pm_else_node_t *cast = (pm_else_node_t *) node;
-            if (cast->statements == NULL || cast->statements->body.size == 0) return NULL;
-            node = cast->statements->body.nodes[cast->statements->body.size - 1];
+            node = (NODE *) cast->statements;
             break;
           }
           case PM_AND_NODE:
@@ -14299,13 +14630,22 @@ value_expr_check(struct parser_params *p, NODE *node)
             return NULL;
         }
     }
+
     return NULL;
+#undef YCASE_VOID_VALUE
 }
 
 static int
 value_expr(struct parser_params *p, NODE *node)
 {
-    value_expr_check(p, node);
+    NODE *void_node = value_expr_check(p, node);
+    if (void_node) {
+        pm_diagnostic_list_append_format(
+            &p->pm->metadata_arena, &p->pm->error_list,
+            void_node->location.start, void_node->location.length,
+            PM_ERR_VOID_EXPRESSION);
+        return FALSE;
+    }
     return TRUE;
 }
 
@@ -14564,18 +14904,24 @@ logop(struct parser_params *p, ID id, NODE *left, NODE *right,
 static void
 no_blockarg(struct parser_params *p, NODE *node)
 {
-    (void) node;
-    if (p->yblock_pass != NULL) {
+    NODE *block = pm_yargs_block_pass(node);
+    if (block == NULL) block = p->yblock_pass;
+    if (block != NULL && PM_NODE_TYPE_P(block, PM_BLOCK_ARGUMENT_NODE)) {
         p->yblock_pass = NULL;
-        compile_error(p, "block argument should not be given");
+        pm_diagnostic_list_append_format(
+            &p->pm->metadata_arena, &p->pm->error_list,
+            block->location.start, block->location.length,
+            PM_ERR_UNEXPECTED_BLOCK_ARGUMENT);
     }
 }
 
 static NODE *
 ret_args(struct parser_params *p, NODE *node)
 {
+    /* even with no positional arguments a block argument may be pending in
+     * the slot (`yield(&b)`), so the check cannot hide behind the node */
+    no_blockarg(p, node);
     if (node) {
-        no_blockarg(p, node);
         if (PM_NODE_TYPE_P(node, PM_ARRAY_NODE) && ((pm_array_node_t *) node)->elements.size == 1) {
             node = ((pm_array_node_t *) node)->elements.nodes[0];
         }
@@ -14706,7 +15052,6 @@ new_args_tail(struct parser_params *p, rb_node_kw_arg_t *kw_args, ID kw_rest_arg
     if (block != 0) {
         block_param = p->yblock_param;
         p->yblock_param = NULL;
-        if (block == idNil) YSTUB("new_args_tail &nil");
     }
 
     return (rb_node_args_t *) pm_parameters_node_new(
@@ -14939,17 +15284,32 @@ new_hash(struct parser_params *p, NODE *hash, const YYLTYPE *loc)
 static void
 error_duplicate_pattern_variable(struct parser_params *p, ID id, const YYLTYPE *loc)
 {
-    /* PORTME: duplicate detection needs the pattern variable tables */
-    (void) id;
-    (void) loc;
+    if (is_private_local_id(p, id)) {
+        return;
+    }
+    if (st_is_member(p->pvtbl, id)) {
+        yyerror1(loc, "duplicated variable name");
+    }
+    else if (p->ctxt.in_alt_pattern && id) {
+        yyerror1(loc, "variable capture in alternative pattern");
+    }
+    else {
+        p->ctxt.capture_in_pattern = 1;
+        st_insert(p->pvtbl, (st_data_t)id, 0);
+    }
 }
 
 static void
 error_duplicate_pattern_key(struct parser_params *p, ID key, const YYLTYPE *loc)
 {
-    /* PORTME: duplicate detection needs the pattern key tables */
-    (void) key;
-    (void) loc;
+    if (!p->pktbl) {
+        p->pktbl = st_init_numtable();
+    }
+    else if (st_is_member(p->pktbl, key)) {
+        yyerror1(loc, "duplicated key name");
+        return;
+    }
+    st_insert(p->pktbl, (st_data_t)key, 0);
 }
 
 static NODE *
@@ -15264,8 +15624,12 @@ static void
 numparam_name(struct parser_params *p, ID id)
 {
     if (!NUMPARAM_ID_P(id)) return;
-    compile_error(p, "_%d is reserved for numbered parameter",
-        NUMPARAM_ID_TO_IDX(id));
+    /* ylvar_beg holds the name's offset, set by assignable() or at the
+     * arg_var grammar sites; numbered parameter names are two bytes */
+    pm_diagnostic_list_append_format(
+        &p->pm->metadata_arena, &p->pm->error_list,
+        p->ylvar_beg, 2, PM_ERR_PARAMETER_NUMBERED_RESERVED,
+        (const char *) p->pm->start + p->ylvar_beg);
 }
 
 static void

@@ -6,10 +6,6 @@
 # introduced on top of the grammar (fine-grained string frozen/mutable flags,
 # duplicate pattern-variable detection, some invalid-code checks) and are
 # kept excluded rather than ported.
-3.3-3.3/block_args_in_array_assignment.txt
-3.3-3.3/keyword_args_in_array_assignment.txt
-3.3-4.0/void_value.txt
-4.1/noblock.txt
 4.1/trailing_comma_after_method_arguments.txt
 begin_ensure.txt
 case_in_hash_key.txt
