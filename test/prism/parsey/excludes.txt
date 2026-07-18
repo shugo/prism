@@ -2,10 +2,11 @@
 # This list is a ratchet: when an entry starts passing, the equivalence test
 # fails until it is removed here.
 #
-# Some entries are intentional: they cover semantics the hand-written parser
-# introduced on top of the grammar (fine-grained string frozen/mutable flags,
-# duplicate pattern-variable detection, some invalid-code checks) and are
-# kept excluded rather than ported.
+# The remaining entries are two deep lexer-strategy differences: heredocs
+# opened inside another literal's interpolation, whose bodies interleave
+# with that literal's continuation lines (the hand parser skips ahead
+# instead of reading line by line), and one begin-keyword-versus-label
+# lexing corner.
 begin_ensure.txt
 regex.txt
 seattlerb/difficult0_.txt

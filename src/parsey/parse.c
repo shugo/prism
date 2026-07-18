@@ -21148,8 +21148,15 @@ rb_node_str_new(struct parser_params *p, rb_parser_string_t *string, const YYLTY
     pm_location_t content_loc = pm_yloc(loc);
     pm_string_t unescaped = pm_ystr_take(p, string);
 
+    /* the frozen-string-literal state applies at token creation, as in the
+     * hand parser: an interpolation's leading part must already be frozen
+     * when the carrier's stateful fold sees it */
+    pm_node_flags_t flags = pm_yexplicit_flags(p);
+    if (p->frozen_string_literal == 1) flags |= PM_STRING_FLAGS_FROZEN | PM_NODE_FLAG_STATIC_LITERAL;
+    else if (p->frozen_string_literal == 0) flags |= PM_STRING_FLAGS_MUTABLE;
+
     return (rb_node_str_t *) pm_string_node_new(
-        p->pm->arena, ++p->pm->node_id, pm_yexplicit_flags(p), content_loc,
+        p->pm->arena, ++p->pm->node_id, flags, content_loc,
         (pm_location_t) { 0 }, content_loc, (pm_location_t) { 0 },
         unescaped);
 }
