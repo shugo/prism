@@ -21837,7 +21837,11 @@ literal_concat(struct parser_params *p, NODE *head, NODE *tail, const YYLTYPE *l
      * parked at 0, so the token provenance flag decides) */
     if (head_str && tail_str && p->heredoc_indent <= 0 && !p->ycontent_squiggly &&
         ((pm_string_node_t *) head)->opening_loc.length == 0 &&
-        ((pm_string_node_t *) tail)->opening_loc.length == 0) {
+        ((pm_string_node_t *) tail)->opening_loc.length == 0 &&
+        /* only contiguous chunks merge: a heredoc that stole the lines in
+         * between leaves a gap, and the hand parser keeps such chunks as
+         * separate parts with their true spans */
+        tail->location.start == head->location.start + head->location.length) {
         pm_string_node_t *head_string = (pm_string_node_t *) head;
         pm_string_node_t *tail_string = (pm_string_node_t *) tail;
 
