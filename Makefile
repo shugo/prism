@@ -33,6 +33,11 @@ all: shared static
 %.c: %.y
 .y.c:
 
+# GCC's static analyzer runs out of memory on the generated LALR tables in
+# parsey/parse.c; strip it for that one file (the hand-written sources still
+# get the full analysis).
+build/shared/parsey/parse.o build/static/parsey/parse.o: CFLAGS := $(filter-out -fanalyzer,$(CFLAGS))
+
 shared: build/libprism.$(SOEXT)
 static: build/libprism.a
 wasm: javascript/src/prism.wasm
