@@ -4076,13 +4076,22 @@ primary		: inline_primary
                     }
                     p->ctxt.has_trailing_semicolon = $ctxt.has_trailing_semicolon;
                 }
-            | keyword_not[kw] '(' expr[arg] rparen
+            | keyword_not[kw] '('[lpar] expr[arg] rparen[rpar]
                 {
                     $$ = call_uni_op(p, method_cond(p, $arg, &@arg), METHOD_NOT, &@kw, &@$);
+                    /* the parentheses belong to the call itself */
+                    if ($$ != NULL && PM_NODE_TYPE_P($$, PM_CALL_NODE)) {
+                        ((pm_call_node_t *) $$)->opening_loc = pm_yloc(&@lpar);
+                        ((pm_call_node_t *) $$)->closing_loc = pm_yclosing(&@rpar);
+                    }
                 }
-            | keyword_not[kw] '('[lpar] rparen
+            | keyword_not[kw] '('[lpar] rparen[rpar]
                 {
-                    $$ = call_uni_op(p, method_cond(p, NEW_NIL(&@lpar), &@lpar), METHOD_NOT, &@kw, &@$);
+                    /* upstream conjures a nil; the hand parser keeps the
+                     * empty parentheses as the receiver */
+                    YYLTYPE parens_loc = { @lpar.beg, @rpar.end };
+                    NODE *parens = pm_yparentheses(p, NULL, &@lpar, &@rpar, &parens_loc);
+                    $$ = call_uni_op(p, method_cond(p, parens, &parens_loc), METHOD_NOT, &@kw, &@$);
                 }
             | fcall[call] brace_block[block]
                 {
@@ -5211,7 +5220,9 @@ p_kw_label	: tLABEL
                         }
                         else {
                             yyerror1(&loc, "symbol literal with interpolation is not allowed");
-                            $$ = rb_intern_str(STR_NEW0());
+                            /* intern without the upstream string detour,
+                             * which would leak its allocation */
+                            $$ = pm_yintern(p, "", 0, p->enc);
                         }
                     }
                 ;
@@ -6085,8 +6096,21 @@ assoc		: arg_value tASSOC arg_value
                     }
                 | tLABEL
                     {
-                        NODE *val = gettable(p, $1, &@$);
-                        if (!val) val = NEW_ERROR(&@$);
+                        /* the read's message spans the label's name, but the
+                         * node itself spans the whole label, colon included */
+                        YYLTYPE name_loc = { @1.beg, @1.end - 1 };
+                        NODE *val = gettable(p, $1, &name_loc);
+                        if (!val) val = NEW_ERROR(&name_loc);
+                        val->location = pm_yloc(&@1);
+                        /* the hand parser marks the omitted value implicit,
+                         * and does not consider the read a variable_call */
+                        if (PM_NODE_TYPE_P(val, PM_CALL_NODE)) {
+                            val->flags &= (pm_node_flags_t) ~PM_CALL_NODE_FLAGS_VARIABLE_CALL;
+                        }
+                        /* the implicit node spans the whole label, colon
+                         * included; the read inside spans the name */
+                        val = (NODE *) pm_implicit_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(&@1), val);
                         $$ = NEW_LIST(pm_yassoc(p, pm_ylabel_symbol(p, $1, &@1), val, NULL, &@$), &@$);
                     }
                 | tSTRING_BEG string_contents tLABEL_END arg_value
@@ -6831,7 +6855,12 @@ tokadd_codepoint(struct parser_params *p, rb_encoding **encp,
 {
     const int wide = !begin;
     size_t numlen;
-    int codepoint = (int)ruby_scan_hex(p->lex.pcur, wide ? p->lex.pend - p->lex.pcur : 4, &numlen);
+    /* the zero-copy source has no NUL terminator, so the scan length must
+     * not reach past the end of input (upstream's line buffer stops the
+     * scan at its terminator) */
+    size_t maxlen = (size_t) (p->lex.pend - p->lex.pcur);
+    if (!wide && maxlen > 4) maxlen = 4;
+    int codepoint = (int)ruby_scan_hex(p->lex.pcur, maxlen, &numlen);
 
     p->lex.pcur += numlen;
     if (p->lex.strterm == NULL ||
@@ -10703,6 +10732,12 @@ pm_ylocals(struct parser_params *p)
             /* id 0 arrives from error productions (f_bad_arg); a nameless
              * local cannot be materialized */
             if (constant == PM_CONSTANT_ID_UNSET) continue;
+            /* repeated _-parameters occupy one slot */
+            bool seen = false;
+            for (size_t j = 0; j < locals.size; j++) {
+                if (locals.ids[j] == constant) { seen = true; break; }
+            }
+            if (seen) continue;
             pm_constant_id_list_append(&p->pm->metadata_arena, &locals, constant);
         }
         xfree(tbl);
@@ -10745,7 +10780,9 @@ pm_ymulti_parens(struct parser_params *p, NODE *node, const YYLTYPE *lparen, con
     if (node == NULL || !PM_NODE_TYPE_P(node, PM_MULTI_TARGET_NODE)) return;
     pm_multi_target_node_t *target = (pm_multi_target_node_t *) node;
     target->lparen_loc = pm_yloc(lparen);
-    target->rparen_loc = pm_yloc(rparen);
+    /* rparen is the `opt_nl ')'` nonterminal; only the ')' byte is the
+     * parenthesis */
+    target->rparen_loc = pm_yclosing(rparen);
     target->base.location = (pm_location_t) { lparen->beg, rparen->end - lparen->beg };
 }
 
@@ -11154,6 +11191,31 @@ pm_yblock_local(struct parser_params *p, ID name, const YYLTYPE *loc)
         p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), pm_yid2const(p, name));
 }
 
+/* Whether the name is declared more than once in the current declaration
+ * table. Duplicate parameters are allowed for names starting with an
+ * underscore, and the hand parser flags every later occurrence. */
+static pm_node_flags_t
+pm_yparam_repeated(struct parser_params *p, ID id)
+{
+    const struct vtable *tables[2] = { p->lvtbl->args, p->lvtbl->vars };
+    int count = 0;
+    for (int t = 0; t < 2; t++) {
+        const struct vtable *table = tables[t];
+        if (table == NULL || DVARS_TERMINAL_P(table)) continue;
+        for (int i = 0; i < table->pos; i++) {
+            if (table->tbl[i] == id) count++;
+        }
+    }
+    return count > 1 ? PM_PARAMETER_FLAGS_REPEATED_PARAMETER : 0;
+}
+
+static pm_node_flags_t
+pm_yparam_repeated_const(struct parser_params *p, pm_constant_id_t name)
+{
+    const pm_constant_t *constant = pm_constant_pool_id_to_constant(&p->pm->constant_pool, name);
+    return pm_yparam_repeated(p, pm_yintern(p, (const char *) constant->start, constant->length, p->enc));
+}
+
 /* A destructured parameter group: the masgn machinery built a MultiTargetNode
  * whose leaves are local-variable targets; in parameter position prism spells
  * those RequiredParameterNode. */
@@ -11166,7 +11228,8 @@ pm_yparam_group(struct parser_params *p, NODE *node)
       case PM_LOCAL_VARIABLE_TARGET_NODE: {
         pm_local_variable_target_node_t *target = (pm_local_variable_target_node_t *) node;
         return (NODE *) pm_required_parameter_node_new(
-            p->pm->arena, ++p->pm->node_id, 0, node->location, target->name);
+            p->pm->arena, ++p->pm->node_id, pm_yparam_repeated_const(p, target->name),
+            node->location, target->name);
       }
       case PM_SPLAT_NODE: {
         pm_splat_node_t *splat = (pm_splat_node_t *) node;
@@ -11258,8 +11321,18 @@ static NODE *
 pm_ylabel_symbol(struct parser_params *p, ID label, const YYLTYPE *loc)
 {
     pm_location_t location = pm_yloc(loc);
+    pm_location_t opening_loc = { 0 };
     pm_location_t value_loc = { location.start, location.length - 1 };
     pm_location_t closing_loc = { location.start + location.length - 1, 1 };
+
+    /* a quoted label ("b": or 'b':) opens with its quote and closes with the
+     * quote-colon pair */
+    uint8_t first = p->pm->start[location.start];
+    if ((first == '"' || first == '\'') && location.length >= 4) {
+        opening_loc = (pm_location_t) { location.start, 1 };
+        value_loc = (pm_location_t) { location.start + 1, location.length - 3 };
+        closing_loc = (pm_location_t) { location.start + location.length - 2, 2 };
+    }
 
     rb_parser_string_t *str = pm_yid2str(p, label);
     pm_node_flags_t flags = PM_NODE_FLAG_STATIC_LITERAL;
@@ -11269,7 +11342,7 @@ pm_ylabel_symbol(struct parser_params *p, ID label, const YYLTYPE *loc)
 
     return (NODE *) pm_symbol_node_new(
         p->pm->arena, ++p->pm->node_id, flags, location,
-        (pm_location_t) { 0 }, value_loc, closing_loc,
+        opening_loc, value_loc, closing_loc,
         str == NULL ? PM_STRING_EMPTY : pm_ystr_take(p, str));
 }
 
@@ -11318,21 +11391,23 @@ pm_ymarker_param(struct parser_params *p, NODE **slot, int kind, ID name, const 
     pm_location_t location = mark;
     pm_constant_id_t name_id = 0;
 
+    pm_node_flags_t flags = 0;
     if (name_loc != NULL) {
         name_location = pm_yloc(name_loc);
         location.length = (name_location.start + name_location.length) - location.start;
         name_id = pm_yid2const(p, name);
+        flags = pm_yparam_repeated(p, name);
     }
 
     switch (kind) {
       case 0:
-        *slot = (NODE *) pm_rest_parameter_node_new(p->pm->arena, ++p->pm->node_id, 0, location, name_id, name_location, mark);
+        *slot = (NODE *) pm_rest_parameter_node_new(p->pm->arena, ++p->pm->node_id, flags, location, name_id, name_location, mark);
         break;
       case 1:
-        *slot = (NODE *) pm_keyword_rest_parameter_node_new(p->pm->arena, ++p->pm->node_id, 0, location, name_id, name_location, mark);
+        *slot = (NODE *) pm_keyword_rest_parameter_node_new(p->pm->arena, ++p->pm->node_id, flags, location, name_id, name_location, mark);
         break;
       default:
-        *slot = (NODE *) pm_block_parameter_node_new(p->pm->arena, ++p->pm->node_id, 0, location, name_id, name_location, mark);
+        *slot = (NODE *) pm_block_parameter_node_new(p->pm->arena, ++p->pm->node_id, flags, location, name_id, name_location, mark);
         break;
     }
 }
@@ -11348,11 +11423,11 @@ pm_ykw_param(struct parser_params *p, ID label, NODE *value, const YYLTYPE *labe
     NODE *param;
     if (value == NULL || NODE_REQUIRED_KEYWORD_P(value)) {
         param = (NODE *) pm_required_keyword_parameter_node_new(
-            p->pm->arena, ++p->pm->node_id, 0, name_location, name, name_location);
+            p->pm->arena, ++p->pm->node_id, pm_yparam_repeated(p, label), name_location, name, name_location);
     }
     else {
         param = (NODE *) pm_optional_keyword_parameter_node_new(
-            p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc), name, name_location, value);
+            p->pm->arena, ++p->pm->node_id, pm_yparam_repeated(p, label), pm_yloc(loc), name, name_location, value);
     }
 
     pm_node_list_t elements = { 0 };
@@ -11513,7 +11588,9 @@ pm_ydef_parens(struct parser_params *p, NODE *node)
     if (!p->yfparens.set || node == NULL || !PM_NODE_TYPE_P(node, PM_DEF_NODE)) return;
     pm_def_node_t *def = (pm_def_node_t *) node;
     def->lparen_loc = pm_yloc(&p->yfparens.opening);
-    def->rparen_loc = pm_yloc(&p->yfparens.closing);
+    /* the closing may have been captured through an rparen nonterminal whose
+     * span starts at the optional newline; only the ')' byte is the paren */
+    def->rparen_loc = pm_yclosing(&p->yfparens.closing);
     p->yfparens.set = 0;
 }
 
@@ -11569,6 +11646,24 @@ pm_yarray_brackets(struct parser_params *p, NODE *node, const YYLTYPE *opening, 
     return node;
 }
 
+/* A semicolon in the given source range, ignoring comments. The ranges
+ * scanned lie between a parenthesis and a statement (or between statements),
+ * so no string content can hide a false positive. */
+static bool
+pm_ysemicolon_in(struct parser_params *p, uint32_t from, uint32_t to)
+{
+    const uint8_t *source = p->pm->start;
+    for (uint32_t i = from; i < to; i++) {
+        if (source[i] == '#') {
+            while (i < to && source[i] != '\n') i++;
+        }
+        else if (source[i] == ';') {
+            return true;
+        }
+    }
+    return false;
+}
+
 /* A parenthesized expression: CRuby drops grouping parens (or marks a block),
  * prism keeps them as a node. */
 static NODE *
@@ -11577,6 +11672,26 @@ pm_yparentheses(struct parser_params *p, NODE *body, const YYLTYPE *opening, con
     pm_statements_node_t *statements = pm_ystatements_opt(p, body);
     pm_node_flags_t flags = 0;
     if (statements != NULL && statements->body.size > 1) flags = PM_PARENTHESES_NODE_FLAGS_MULTIPLE_STATEMENTS;
+
+    /* the hand parser also flags a lone statement (or none) when an explicit
+     * semicolon appears between the parentheses */
+    if (flags == 0) {
+        uint32_t cursor = opening->end;
+        if (statements != NULL) {
+            for (size_t i = 0; i < statements->body.size && flags == 0; i++) {
+                const pm_node_t *statement = statements->body.nodes[i];
+                if (pm_ysemicolon_in(p, cursor, statement->location.start)) {
+                    flags = PM_PARENTHESES_NODE_FLAGS_MULTIPLE_STATEMENTS;
+                }
+                uint32_t statement_end = statement->location.start + statement->location.length;
+                if (statement_end > cursor) cursor = statement_end;
+            }
+        }
+        if (flags == 0 && closing->beg > cursor && pm_ysemicolon_in(p, cursor, closing->beg)) {
+            flags = PM_PARENTHESES_NODE_FLAGS_MULTIPLE_STATEMENTS;
+        }
+    }
+
     return (NODE *) pm_parentheses_node_new(
         p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
         (pm_node_t *) statements, pm_yloc(opening), pm_yclosing(closing));
@@ -11746,8 +11861,7 @@ rb_node_for_masgn_new(struct parser_params *p, NODE *nd_var, const YYLTYPE *loc)
 static rb_node_retry_t *
 rb_node_retry_new(struct parser_params *p, const YYLTYPE *loc)
 {
-    YSTUB("rb_node_retry_new");
-    return NULL;
+    return (rb_node_retry_t *) pm_retry_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc));
 }
 
 static rb_node_begin_t *
@@ -12844,7 +12958,7 @@ rb_node_args_aux_new(struct parser_params *p, ID nd_pid, int nd_plen, const YYLT
     if (name == PM_CONSTANT_ID_UNSET) return NULL;
 
     pm_node_t *required = (pm_node_t *) pm_required_parameter_node_new(
-        p->pm->arena, ++p->pm->node_id, 0, location, name);
+        p->pm->arena, ++p->pm->node_id, pm_yparam_repeated(p, nd_pid), location, name);
 
     pm_node_list_t elements = { 0 };
     pm_node_list_append(p->pm->arena, &elements, required);
@@ -12873,7 +12987,7 @@ rb_node_opt_arg_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
     }
 
     NODE *param = (NODE *) pm_optional_parameter_node_new(
-        p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+        p->pm->arena, ++p->pm->node_id, pm_yparam_repeated_const(p, write->name), pm_yloc(loc),
         write->name, write->name_loc, operator, write->value);
 
     pm_node_list_t elements = { 0 };
@@ -13130,8 +13244,8 @@ rb_node_next_new(struct parser_params *p, NODE *nd_stts, const YYLTYPE *loc, con
 static rb_node_redo_t *
 rb_node_redo_new(struct parser_params *p, const YYLTYPE *loc, const YYLTYPE *keyword_loc)
 {
-    YSTUB("rb_node_redo_new");
-    return NULL;
+    (void) keyword_loc;
+    return (rb_node_redo_t *) pm_redo_node_new(p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc));
 }
 
 static rb_node_def_temp_t *
@@ -13500,10 +13614,16 @@ new_qcall(struct parser_params* p, ID atype, NODE *recv, ID mid, NODE *args, con
         pm_call_node_t *call = (pm_call_node_t *) qcall;
 
         /* op_loc is the message token, except in the `a.(args)` forms, where
-         * the rules pass the call operator itself; the operator's first byte
-         * tells the two apart, and only a real message is recorded. */
-        uint8_t first = p->pm->start[op_loc->beg];
-        if (first == '.' || first == '&' || first == ':') {
+         * the rules pass the call operator itself; only an exact `.`, `&.`,
+         * or `::` is the operator -- a message can be an operator name like
+         * `&` or `<`, so a first-byte test would misfire. */
+        const uint8_t *op = p->pm->start + op_loc->beg;
+        uint32_t op_length = op_loc->end - op_loc->beg;
+        bool is_call_operator =
+            (op_length == 1 && op[0] == '.') ||
+            (op_length == 2 && op[0] == '&' && op[1] == '.') ||
+            (op_length == 2 && op[0] == ':' && op[1] == ':');
+        if (is_call_operator) {
             call->call_operator_loc = pm_yloc(op_loc);
         }
         else {
@@ -15040,7 +15160,32 @@ new_args(struct parser_params *p, rb_node_args_aux_t *pre_args, rb_node_opt_arg_
     parameters->optionals = optionals;
     parameters->rest = rest;
     parameters->posts = posts;
-    parameters->base.location = pm_yloc(loc);
+
+    /* the node spans its parameters, not the whole rule, which may include
+     * a trailing comma */
+    {
+        uint32_t start = UINT32_MAX, end = 0;
+#define YPARAM_BOUND(param) do { \
+            if ((param) != NULL) { \
+                uint32_t s = (param)->location.start; \
+                uint32_t e = s + (param)->location.length; \
+                if (s < start) start = s; \
+                if (e > end) end = e; \
+            } \
+        } while (0)
+#define YPARAM_BOUND_LIST(list) \
+        for (size_t bound_i = 0; bound_i < (list).size; bound_i++) YPARAM_BOUND((list).nodes[bound_i])
+        YPARAM_BOUND_LIST(parameters->requireds);
+        YPARAM_BOUND_LIST(parameters->optionals);
+        YPARAM_BOUND(parameters->rest);
+        YPARAM_BOUND_LIST(parameters->posts);
+        YPARAM_BOUND_LIST(parameters->keywords);
+        YPARAM_BOUND((pm_node_t *) parameters->keyword_rest);
+        YPARAM_BOUND((pm_node_t *) parameters->block);
+#undef YPARAM_BOUND_LIST
+#undef YPARAM_BOUND
+        parameters->base.location = start == UINT32_MAX ? pm_yloc(loc) : (pm_location_t) { start, end - start };
+    }
     return (rb_node_args_t *) parameters;
 }
 

@@ -6,33 +6,20 @@
 # introduced on top of the grammar (fine-grained string frozen/mutable flags,
 # duplicate pattern-variable detection, some invalid-code checks) and are
 # kept excluded rather than ported.
-4.1/trailing_comma_after_method_arguments.txt
 begin_ensure.txt
-case_in_hash_key.txt
 character_literal.txt
-constants.txt
 dash_heredocs.txt
 defined.txt
 encoding_binary.txt
-hashes.txt
 heredoc_percent_q_newline_delimiter.txt
 heredocs_leading_whitespace.txt
 heredocs_nested.txt
 heredocs_with_fake_newlines.txt
-if.txt
-keywords.txt
 methods.txt
 multi_write.txt
-nils.txt
-not.txt
 patterns.txt
 regex_escape_encoding.txt
 regex.txt
-repeat_parameters.txt
-rescue_modifier_statement_value.txt
-rescue.txt
-seattlerb/assoc__bare.txt
-seattlerb/bug_not_parens.txt
 seattlerb/case_in.txt
 seattlerb/difficult0_.txt
 seattlerb/dstr_evstr.txt
@@ -55,17 +42,9 @@ tilde_heredocs.txt
 unparser/corpus/literal/defined.txt
 unparser/corpus/literal/defs.txt
 unparser/corpus/literal/literal.txt
-unparser/corpus/literal/pattern.txt
-unparser/corpus/literal/send.txt
 unparser/corpus/semantic/dstr.txt
-whitequark/arg_duplicate_ignored.txt
 whitequark/dedenting_heredoc.txt
 whitequark/defs.txt
-whitequark/hash_pair_value_omission.txt
-whitequark/keyword_argument_omission.txt
 whitequark/masgn_attr.txt
-whitequark/masgn_nested.txt
 whitequark/newline_in_hash_argument.txt
-whitequark/not.txt
 whitequark/parser_drops_truncated_parts_of_squiggly_heredoc.txt
-whitequark/ruby_bug_19281.txt
