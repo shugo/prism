@@ -494,7 +494,9 @@ struct rb_args_info;
 
 #define RUBY_SYMBOL_EXPORT_BEGIN
 #define RUBY_SYMBOL_EXPORT_END
-#define ruby_verbose 0
+/* prism records every warning and lets the consumer filter by level, so the
+ * verbose-only machinery (unused-variable tracking) always runs. */
+#define ruby_verbose 1
 #define FIXNUM_MAX (LONG_MAX >> 1)
 
 /* Symbol-string round trips: the ID's spelling, as a fresh ystring the
@@ -1010,6 +1012,11 @@ struct parser_params {
     /* fork: what the last dummy end token closed, for its diagnostic. */
     const char *ydummy_end_kind;
     int ydummy_end_lineno;
+
+    /* fork: the start offset of the variable name assignable() is declaring;
+     * local_var records it in the used table (where CRuby stores the source
+     * line) so unused-variable warnings carry the name's exact location. */
+    uint32_t ylvar_beg;
 
     /* fork: a heredoc opener span waiting to become the deferred END
      * token's location (see pm_yheredoc_end_capture). */
@@ -13704,6 +13711,7 @@ static NODE*
 assignable(struct parser_params *p, ID id, NODE *val, const YYLTYPE *loc)
 {
     const char *err = 0;
+    p->ylvar_beg = loc->beg;
     int node_type = assignable0(p, id, &err);
     switch (node_type) {
       case NODE_DASGN: return NEW_DASGN(id, val, loc);
@@ -13881,11 +13889,66 @@ splat_array(NODE* node)
 static void
 mark_lvar_used(struct parser_params *p, NODE *rhs)
 {
-    /* upstream marks LVAR_USED for unused-variable warnings, deferred */
-    (void) rhs;
+    ID *vidp = NULL;
+    if (!rhs) return;
+    /* upstream switches on NODE_LASGN vs NODE_DASGN; both map to the same pm
+     * node here, and the vtables the two lookups walk are disjoint, so try
+     * the block scopes first and fall back to the method scope. */
+    if (PM_NODE_TYPE_P(rhs, PM_LOCAL_VARIABLE_WRITE_NODE)) {
+        const pm_constant_t *name = pm_constant_pool_id_to_constant(&p->pm->constant_pool, ((pm_local_variable_write_node_t *) rhs)->name);
+        ID id = pm_yintern(p, (const char *) name->start, name->length, p->enc);
+        if (dvar_defined_ref(p, id, &vidp) || local_id_ref(p, id, &vidp)) {
+            if (vidp) *vidp |= LVAR_USED;
+        }
+    }
 }
 
 static int is_static_content(NODE *node);
+
+/* The hand-written parser (parse_assignment_value_local) counts a local
+ * variable write appearing in the value of another write as a use of that
+ * variable, looking through begin blocks, parentheses, and statement lists.
+ * CRuby does not, so this is a deliberate divergence toward its warnings.
+ * The bracket-less array case is the fork's spelling of the hand parser
+ * walking each element of a multi-value right-hand side. */
+static void
+mark_assignment_value_lvars(struct parser_params *p, NODE *node)
+{
+    if (node == NULL) return;
+    switch (PM_NODE_TYPE(node)) {
+      case PM_BEGIN_NODE: {
+        pm_begin_node_t *cast = (pm_begin_node_t *) node;
+        if (cast->statements != NULL) mark_assignment_value_lvars(p, (NODE *) cast->statements);
+        break;
+      }
+      case PM_LOCAL_VARIABLE_WRITE_NODE:
+        mark_lvar_used(p, node);
+        break;
+      case PM_PARENTHESES_NODE: {
+        pm_parentheses_node_t *cast = (pm_parentheses_node_t *) node;
+        if (cast->body != NULL) mark_assignment_value_lvars(p, cast->body);
+        break;
+      }
+      case PM_STATEMENTS_NODE: {
+        pm_statements_node_t *cast = (pm_statements_node_t *) node;
+        for (size_t i = 0; i < cast->body.size; i++) {
+            mark_assignment_value_lvars(p, cast->body.nodes[i]);
+        }
+        break;
+      }
+      case PM_ARRAY_NODE: {
+        pm_array_node_t *cast = (pm_array_node_t *) node;
+        if (cast->opening_loc.length == 0) {
+            for (size_t i = 0; i < cast->elements.size; i++) {
+                mark_assignment_value_lvars(p, cast->elements.nodes[i]);
+            }
+        }
+        break;
+      }
+      default:
+        break;
+    }
+}
 
 static NODE *
 node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ctxt, const YYLTYPE *loc)
@@ -13918,6 +13981,8 @@ node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ct
     else {
         rhs = pm_yarray_finalize(p, rhs);
     }
+
+    mark_assignment_value_lvars(p, rhs);
 
     switch (PM_NODE_TYPE(lhs)) {
       case PM_LOCAL_VARIABLE_WRITE_NODE:
@@ -13988,12 +14053,61 @@ node_assign(struct parser_params *p, NODE *lhs, NODE *rhs, struct lex_context ct
 static NODE *
 value_expr_check(struct parser_params *p, NODE *node)
 {
-    return NULL; /* not void */
+    /* Only the mark_lvar_used side effects of upstream's traversal are
+     * ported: an assignment in value position counts as a use of its
+     * variable. The void-value-expression errors the full traversal also
+     * produces are still to come. */
+    while (node) {
+        switch (PM_NODE_TYPE(node)) {
+          case PM_BEGIN_NODE: {
+            pm_begin_node_t *cast = (pm_begin_node_t *) node;
+            if (cast->statements == NULL || cast->statements->body.size == 0) return NULL;
+            node = cast->statements->body.nodes[cast->statements->body.size - 1];
+            break;
+          }
+          case PM_IF_NODE: {
+            pm_if_node_t *cast = (pm_if_node_t *) node;
+            if (cast->statements == NULL || cast->statements->body.size == 0) return NULL;
+            if (cast->subsequent == NULL) return NULL;
+            value_expr_check(p, cast->statements->body.nodes[cast->statements->body.size - 1]);
+            node = cast->subsequent;
+            break;
+          }
+          case PM_UNLESS_NODE: {
+            pm_unless_node_t *cast = (pm_unless_node_t *) node;
+            if (cast->statements == NULL || cast->statements->body.size == 0) return NULL;
+            if (cast->else_clause == NULL) return NULL;
+            value_expr_check(p, cast->statements->body.nodes[cast->statements->body.size - 1]);
+            node = (NODE *) cast->else_clause;
+            break;
+          }
+          case PM_ELSE_NODE: {
+            pm_else_node_t *cast = (pm_else_node_t *) node;
+            if (cast->statements == NULL || cast->statements->body.size == 0) return NULL;
+            node = cast->statements->body.nodes[cast->statements->body.size - 1];
+            break;
+          }
+          case PM_AND_NODE:
+            node = ((pm_and_node_t *) node)->left;
+            break;
+          case PM_OR_NODE:
+            node = ((pm_or_node_t *) node)->left;
+            break;
+          case PM_LOCAL_VARIABLE_WRITE_NODE:
+          case PM_MULTI_WRITE_NODE:
+            mark_lvar_used(p, node);
+            return NULL;
+          default:
+            return NULL;
+        }
+    }
+    return NULL;
 }
 
 static int
 value_expr(struct parser_params *p, NODE *node)
 {
+    value_expr_check(p, node);
     return TRUE;
 }
 
@@ -14603,6 +14717,10 @@ new_op_assign(struct parser_params *p, NODE *lhs, ID op, NODE *rhs, struct lex_c
     switch (PM_NODE_TYPE(lhs)) {
       case PM_LOCAL_VARIABLE_WRITE_NODE: {
         pm_local_variable_write_node_t *write = (pm_local_variable_write_node_t *) lhs;
+        /* upstream builds the read side with gettable(), which marks the
+         * variable used; the pm operator-write nodes fold the read in, so
+         * mark it here. */
+        mark_lvar_used(p, lhs);
         /* locals order name_loc/operator/value differently and carry depth */
         if (is_or) return (NODE *) pm_local_variable_or_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, write->name_loc, operator, rhs, write->name, write->depth);
         if (is_and) return (NODE *) pm_local_variable_and_write_node_new(p->pm->arena, ++p->pm->node_id, 0, location, write->name_loc, operator, rhs, write->name, write->depth);
@@ -14765,7 +14883,24 @@ new_bodystmt(struct parser_params *p, NODE *head, NODE *rescue, NODE *rescue_els
 static void
 warn_unused_var(struct parser_params *p, struct local_vars *local)
 {
-    YSTUB("warn_unused_var");
+    int cnt;
+
+    if (!local->used) return;
+    cnt = local->used->pos;
+    if (cnt != local->vars->pos) {
+        rb_parser_fatal(p, "local->used->pos != local->vars->pos");
+    }
+    ID *v = local->vars->tbl;
+    ID *u = local->used->tbl;
+    for (int i = 0; i < cnt; ++i) {
+        if (!v[i] || (u[i] & LVAR_USED)) continue;
+        if (is_private_local_id(p, v[i])) continue;
+        const pm_constant_t *name = pm_constant_pool_id_to_constant(&p->pm->constant_pool, pm_yid2const(p, v[i]));
+        pm_diagnostic_list_append_format(
+            &p->pm->metadata_arena, &p->pm->warning_list,
+            (uint32_t) u[i], (uint32_t) name->length,
+            PM_WARN_UNUSED_LOCAL_VARIABLE, (int) name->length, (const char *) name->start);
+    }
     return;
 }
 
@@ -14884,7 +15019,7 @@ local_var(struct parser_params *p, ID id)
     numparam_name(p, id);
     vtable_add(p->lvtbl->vars, id);
     if (p->lvtbl->used) {
-        vtable_add(p->lvtbl->used, (ID)p->ruby_sourceline);
+        vtable_add(p->lvtbl->used, (ID)p->ylvar_beg);
     }
 }
 
