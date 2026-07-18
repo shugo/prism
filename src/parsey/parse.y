@@ -1213,7 +1213,9 @@ pm_yst_insert(struct parser_params *p, st_table *table, st_data_t key)
     if (table->size == table->capacity) {
         size_t capacity = table->capacity == 0 ? 8 : table->capacity * 2;
         st_data_t *entries = (st_data_t *) pm_arena_alloc(&p->pm->metadata_arena, capacity * sizeof(st_data_t), PRISM_ALIGNOF(st_data_t));
-        memcpy(entries, table->entries, table->size * sizeof(st_data_t));
+        if (table->entries != NULL) {
+            memcpy(entries, table->entries, table->size * sizeof(st_data_t));
+        }
         table->entries = entries;
         table->capacity = capacity;
     }
