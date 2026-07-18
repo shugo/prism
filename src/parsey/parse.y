@@ -2841,11 +2841,9 @@ program		:  {
                         if ($2 && !compile_for_eval) {
                             NODE *node = $2;
                             /* last expression should not be void */
-                            if (nd_type_p(node, NODE_BLOCK)) {
-                                while (0) { /* PORTME: walk to the last expression */
-                                    YSTUB("grammar"); /* PORTME: node = RNODE_BLOCK(node)->nd_next; */
-                                }
-                                YSTUB("grammar"); /* PORTME: node = RNODE_BLOCK(node)->nd_head; */
+                            if (PM_NODE_TYPE_P(node, PM_STATEMENTS_NODE)) {
+                                pm_node_list_t *body = &((pm_statements_node_t *) node)->body;
+                                node = body->size > 0 ? body->nodes[body->size - 1] : NULL;
                             }
                             node = remove_begin(node);
                             void_expr(p, node);
@@ -5268,7 +5266,17 @@ exc_var		: tASSOC lhs
 opt_ensure	: k_ensure stmts terms?
                     {
                         p->ctxt.in_rescue = $1.in_rescue;
-                        void_expr(p, void_stmts(p, $2));
+                        /* CRuby void-checks every ensure body here, but the
+                         * hand-written prism parser only checks ensure bodies
+                         * of begin and def (PM_CONTEXT_BEGIN_ENSURE and
+                         * PM_CONTEXT_DEF_ENSURE), so gate on the enclosing
+                         * construct to match its warnings. */
+                        {
+                            const end_expect_token_locations_t *encl = peek_end_expect_token_locations(p);
+                            if (encl && (strcmp(encl->kind, "begin") == 0 || strcmp(encl->kind, "def") == 0)) {
+                                void_expr(p, void_stmts(p, $2));
+                            }
+                        }
                         $$ = pm_yensure(p, $2, &@1, &@$);
                     }
                 | none
@@ -10684,6 +10692,140 @@ pm_ymake_list(struct parser_params *p, NODE *list, const YYLTYPE *loc)
     return list;
 }
 
+/* A statement whose value evaluates to nothing observable: the mirror of
+ * the hand-written parser's pm_void_statement_check, kept in its shape so
+ * the warnings match exactly. */
+static void
+pm_yvoid_statement_check(struct parser_params *p, const pm_node_t *node)
+{
+    const char *type = NULL;
+    int length = 0;
+
+    switch (PM_NODE_TYPE(node)) {
+        case PM_BACK_REFERENCE_READ_NODE:
+        case PM_CLASS_VARIABLE_READ_NODE:
+        case PM_GLOBAL_VARIABLE_READ_NODE:
+        case PM_INSTANCE_VARIABLE_READ_NODE:
+        case PM_LOCAL_VARIABLE_READ_NODE:
+        case PM_NUMBERED_REFERENCE_READ_NODE:
+            type = "a variable";
+            length = 10;
+            break;
+        case PM_CALL_NODE: {
+            const pm_call_node_t *cast = (const pm_call_node_t *) node;
+            if (cast->call_operator_loc.length > 0 || cast->message_loc.length == 0) break;
+
+            const pm_constant_t *message = pm_constant_pool_id_to_constant(&p->pm->constant_pool, cast->name);
+            switch (message->length) {
+                case 1:
+                    switch (message->start[0]) {
+                        case '+': case '-': case '*': case '/': case '%':
+                        case '|': case '^': case '&': case '>': case '<':
+                            type = (const char *) message->start;
+                            length = 1;
+                            break;
+                    }
+                    break;
+                case 2:
+                    switch (message->start[1]) {
+                        case '=':
+                            if (message->start[0] == '<' || message->start[0] == '>' || message->start[0] == '!' || message->start[0] == '=') {
+                                type = (const char *) message->start;
+                                length = 2;
+                            }
+                            break;
+                        case '@':
+                            if (message->start[0] == '+' || message->start[0] == '-') {
+                                type = (const char *) message->start;
+                                length = 2;
+                            }
+                            break;
+                        case '*':
+                            if (message->start[0] == '*') {
+                                type = (const char *) message->start;
+                                length = 2;
+                            }
+                            break;
+                    }
+                    break;
+                case 3:
+                    if (memcmp(message->start, "<=>", 3) == 0) {
+                        type = "<=>";
+                        length = 3;
+                    }
+                    break;
+            }
+
+            break;
+        }
+        case PM_CONSTANT_PATH_NODE:
+            type = "::";
+            length = 2;
+            break;
+        case PM_CONSTANT_READ_NODE:
+            type = "a constant";
+            length = 10;
+            break;
+        case PM_DEFINED_NODE:
+            type = "defined?";
+            length = 8;
+            break;
+        case PM_FALSE_NODE:
+            type = "false";
+            length = 5;
+            break;
+        case PM_FLOAT_NODE:
+        case PM_IMAGINARY_NODE:
+        case PM_INTEGER_NODE:
+        case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
+        case PM_INTERPOLATED_STRING_NODE:
+        case PM_RATIONAL_NODE:
+        case PM_REGULAR_EXPRESSION_NODE:
+        case PM_SOURCE_ENCODING_NODE:
+        case PM_SOURCE_FILE_NODE:
+        case PM_SOURCE_LINE_NODE:
+        case PM_STRING_NODE:
+        case PM_SYMBOL_NODE:
+            type = "a literal";
+            length = 9;
+            break;
+        case PM_NIL_NODE:
+            type = "nil";
+            length = 3;
+            break;
+        case PM_RANGE_NODE: {
+            const pm_range_node_t *cast = (const pm_range_node_t *) node;
+
+            if (PM_NODE_FLAG_P(cast, PM_RANGE_FLAGS_EXCLUDE_END)) {
+                type = "...";
+                length = 3;
+            } else {
+                type = "..";
+                length = 2;
+            }
+
+            break;
+        }
+        case PM_SELF_NODE:
+            type = "self";
+            length = 4;
+            break;
+        case PM_TRUE_NODE:
+            type = "true";
+            length = 4;
+            break;
+        default:
+            break;
+    }
+
+    if (type != NULL) {
+        pm_diagnostic_list_append_format(
+            &p->pm->metadata_arena, &p->pm->warning_list,
+            node->location.start, node->location.length,
+            PM_WARN_VOID_STATEMENT, length, type);
+    }
+}
+
 /* A pinned variable pattern: ^x. */
 static NODE *
 pm_ypinned_var(struct parser_params *p, NODE *variable, const YYLTYPE *operator_loc, const YYLTYPE *loc)
@@ -13858,13 +14000,23 @@ value_expr(struct parser_params *p, NODE *node)
 static void
 void_expr(struct parser_params *p, NODE *node)
 {
-    /* void-expression warnings are not ported */
+    if (node == NULL) return;
+    pm_yvoid_statement_check(p, node);
 }
 
 /* warns useless use of block and returns the last statement node */
 static NODE *
 void_stmts(struct parser_params *p, NODE *node)
 {
+    if (node != NULL && PM_NODE_TYPE_P(node, PM_STATEMENTS_NODE)) {
+        pm_statements_node_t *statements = (pm_statements_node_t *) node;
+        for (size_t i = 0; i + 1 < statements->body.size; i++) {
+            pm_yvoid_statement_check(p, statements->body.nodes[i]);
+        }
+        if (statements->body.size > 0) {
+            return statements->body.nodes[statements->body.size - 1];
+        }
+    }
     return node;
 }
 
