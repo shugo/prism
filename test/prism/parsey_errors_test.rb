@@ -19,15 +19,9 @@ module Prism
   class ParseyErrorsTest < TestCase
     base = File.expand_path("errors", __dir__)
 
-    # The hand-written parser implements version-specific checks for older
-    # syntax versions; the fork implements the newest grammar only.
-    VALIDITY_EXCLUDES = [
-      "3.3-3.3/circular_parameters.txt",
-      "3.3-3.4/leading_logical.txt",
-      "3.3-3.4/private_endless_method.txt",
-      "3.3-4.0/do_not_allow_trailing_commas_in_method_parameters.txt",
-      "3.3-4.0/singleton_method_with_void_value.txt"
-    ].freeze
+    # Version-gated checks of older syntax versions are ported; nothing is
+    # currently excluded.
+    VALIDITY_EXCLUDES = [].freeze
 
     matches = File.readlines(File.join(__dir__, "parsey", "error_matches.txt"), chomp: true)
       .reject { |line| line.empty? || line.start_with?("#") }

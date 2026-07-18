@@ -815,6 +815,7 @@ struct lex_context {
     BITFIELD(enum rb_parser_shareability, shareable_constant_value, 2);
     BITFIELD(enum rescue_context, in_rescue, 2);
     unsigned int cant_return: 1;
+    unsigned int in_sclass: 1;
     unsigned int in_alt_pattern: 1;
     unsigned int capture_in_pattern: 1;
 };
@@ -1076,6 +1077,11 @@ struct parser_params {
         size_t size;
         size_t capacity;
     } ywarn_spans;
+
+    /* fork: the parameter whose default value is being parsed, for the
+     * circular-argument-reference error of versions up to 3.3. */
+    ID ycur_arg;
+    unsigned int ycur_arg_used:1;
 
     /* fork: the start offset of the variable name assignable() is declaring;
      * local_var records it in the used table (where CRuby stores the source
@@ -1627,6 +1633,9 @@ static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
 static void pm_ymarker_param(struct parser_params *p, NODE **slot, int kind, ID name, const YYLTYPE *mark_loc, const YYLTYPE *name_loc);
 static NODE *pm_ykw_param(struct parser_params *p, ID label, NODE *value, const YYLTYPE *label_loc, const YYLTYPE *loc);
 static void pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword);
+static void pm_ycircular_param_check(struct parser_params *p, ID name, uint32_t name_beg, uint32_t name_end);
+static void pm_yendless_command_arg_check(struct parser_params *p, NODE *node);
+static void pm_ysingleton_literal_check(struct parser_params *p, NODE *node);
 static bool pm_ybodystmt_wrapper_p(NODE *node);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -2180,6 +2189,7 @@ endless_method_name(struct parser_params *p, ID mid, const YYLTYPE *loc)
         if (!(p->ctxt.in_class = (k)[0] != 0)) { \
             /* singleton class */ \
             p->ctxt.cant_return = !p->ctxt.in_def; \
+            p->ctxt.in_sclass = 1; \
             p->ctxt.in_def = 0; \
         } \
         else if (p->ctxt.in_def) { \
@@ -2188,6 +2198,7 @@ endless_method_name(struct parser_params *p, ID mid, const YYLTYPE *loc)
         } \
         else { \
             p->ctxt.cant_return = 1; \
+            p->ctxt.in_sclass = 0; \
         } \
         local_push(p, 0); \
     } while (0)
@@ -2236,7 +2247,10 @@ add_block_exit(struct parser_params *p, NODE *node)
         return node;
     }
     if (!p->ctxt.in_defined && p->exits != NULL) {
-        pm_node_list_append(p->pm->arena, (pm_node_list_t *) p->exits, node);
+        pm_node_list_t *list = (pm_node_list_t *) p->exits;
+        /* both the grammar action and the node constructor register: once */
+        if (list->size > 0 && list->nodes[list->size - 1] == node) return node;
+        pm_node_list_append(p->pm->arena, list, node);
     }
     return node;
 }
@@ -2786,6 +2800,7 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
                 : f_arg_asgn f_eq value
                     {
                         p->ctxt.in_argdef = 1;
+                        pm_ycircular_param_check(p, $f_arg_asgn, @f_arg_asgn.beg, @f_arg_asgn.end);
                         $$ = NEW_OPT_ARG(assignable(p, $f_arg_asgn, $value, &@f_arg_asgn), &@$);
                     }
                 ;
@@ -2805,6 +2820,7 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
                 : f_label value
                     {
                         p->ctxt.in_argdef = 1;
+                        pm_ycircular_param_check(p, $f_label, @f_label.beg, @f_label.end - 1);
                         assignable(p, $f_label, $value, &@$); /* registers the local */
                         $$ = (rb_node_kw_arg_t *) pm_ykw_param(p, $f_label, $value, &@f_label, &@$);
                     }
@@ -3147,7 +3163,9 @@ stmt		: keyword_alias[kw] fitem[new] {SET_LEX_STATE(EXPR_FNAME|EXPR_FITEM);} fit
                     }
                 | k_END[k_end] block_open[lbrace] compstmt(stmts)[body] '}'[rbrace]
                     {
-                        clear_block_exit(p, true);
+                        /* https://bugs.ruby-lang.org/issues/20409: break and
+                         * friends in an END block became errors in 4.1 */
+                        clear_block_exit(p, p->pm->version >= PM_OPTIONS_VERSION_CRUBY_4_1);
                         restore_block_exit(p, $block_open);
                         p->ctxt = $k_end;
                         {
@@ -3897,6 +3915,7 @@ call_args	: value_expr(command)
                     }
                 | def_endless_method(endless_command)
                     {
+                        pm_yendless_command_arg_check(p, $1);
                         $$ = NEW_LIST($1, &@$);
                     }
                 | args opt_block_arg
@@ -4494,7 +4513,8 @@ k_end		: keyword_end
 
 k_return	: keyword_return
                     {
-                        if (p->ctxt.cant_return && !dyna_in_block(p))
+                        if (p->ctxt.cant_return && !dyna_in_block(p) &&
+                            !(p->ctxt.in_sclass && p->pm->version < PM_OPTIONS_VERSION_CRUBY_3_4))
                             yyerror1(&@1, "Invalid return in class/module body");
                     }
                 ;
@@ -5919,6 +5939,10 @@ f_arg_asgn	: f_norm_arg
                     {
                         p->ylvar_beg = @1.beg;
                         arg_var(p, $1);
+                        if (p->pm->version <= PM_OPTIONS_VERSION_CRUBY_3_3) {
+                            p->ycur_arg = $1;
+                            p->ycur_arg_used = 0;
+                        }
                         $$ = $1;
                     }
                 ;
@@ -5963,6 +5987,10 @@ f_label 	: tLABEL
                         VALUE e = formal_argument_error(p, $$ = $1);
                         if (e) {
                             $$ = 0;
+                        }
+                        if (p->pm->version <= PM_OPTIONS_VERSION_CRUBY_3_3) {
+                            p->ycur_arg = $1;
+                            p->ycur_arg_used = 0;
                         }
                         /*
                          * Workaround for Prism::ParseTest#test_filepath for
@@ -6055,6 +6083,13 @@ f_block_arg	: blkarg_mark tIDENTIFIER
 
 opt_comma	: ','?
                     {
+                        /* https://bugs.ruby-lang.org/issues/19107: a trailing
+                         * comma after method parameters arrived in 4.1 */
+                        if (@$.end > @$.beg && p->pm->version < PM_OPTIONS_VERSION_CRUBY_4_1) {
+                            pm_diagnostic_list_append(
+                                &p->pm->metadata_arena, &p->pm->error_list,
+                                @$.beg, @$.end - @$.beg, PM_ERR_PARAMETER_WILD_LOOSE_COMMA);
+                        }
                         $$ = 0;
                     }
                 ;
@@ -6062,36 +6097,7 @@ opt_comma	: ','?
 
 singleton	: value_expr(singleton_expr)
                     {
-                        NODE *expr = last_expr_node($1);
-                        if (expr != NULL && PM_NODE_TYPE_P(expr, PM_PARENTHESES_NODE)) {
-                            pm_parentheses_node_t *parens = (pm_parentheses_node_t *) expr;
-                            if (parens->body != NULL) expr = parens->body;
-                        }
-                        switch (PM_NODE_TYPE(expr)) {
-                          case PM_STRING_NODE:
-                          case PM_INTERPOLATED_STRING_NODE:
-                          case PM_X_STRING_NODE:
-                          case PM_INTERPOLATED_X_STRING_NODE:
-                          case PM_REGULAR_EXPRESSION_NODE:
-                          case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
-                          case PM_SYMBOL_NODE:
-                          case PM_INTERPOLATED_SYMBOL_NODE:
-                          case PM_SOURCE_LINE_NODE:
-                          case PM_SOURCE_FILE_NODE:
-                          case PM_SOURCE_ENCODING_NODE:
-                          case PM_INTEGER_NODE:
-                          case PM_FLOAT_NODE:
-                          case PM_RATIONAL_NODE:
-                          case PM_IMAGINARY_NODE:
-                          case PM_ARRAY_NODE:
-                            pm_diagnostic_list_append(
-                                &p->pm->metadata_arena, &p->pm->error_list,
-                                expr->location.start, expr->location.length,
-                                PM_ERR_SINGLETON_FOR_LITERALS);
-                            break;
-                          default:
-                            break;
-                        }
+                        pm_ysingleton_literal_check(p, $1);
                         $$ = $1;
                     }
                 ;
@@ -9410,7 +9416,9 @@ parse_gvar(struct parser_params *p, const enum lex_state_e last_state)
         tokenize_ident(p);
     }
     else {
-        compile_error(p, "'%.*s' is not allowed as a global variable name", toklen(p), tok(p));
+        compile_error(p, p->pm->version <= PM_OPTIONS_VERSION_CRUBY_3_3
+                      ? "`%.*s' is not allowed as a global variable name"
+                      : "'%.*s' is not allowed as a global variable name", toklen(p), tok(p));
         set_yylval_noname();
     }
     return tGVAR;
@@ -9473,10 +9481,14 @@ parse_atmark(struct parser_params *p, const enum lex_state_e last_state)
         pushback(p, c);
         RUBY_SET_YYLLOC(loc);
         if (result == tIVAR) {
-            compile_error(p, "'@%c' is not allowed as an instance variable name", c);
+            compile_error(p, p->pm->version <= PM_OPTIONS_VERSION_CRUBY_3_3
+                          ? "`@%c' is not allowed as an instance variable name"
+                          : "'@%c' is not allowed as an instance variable name", c);
         }
         else {
-            compile_error(p, "'@@%c' is not allowed as a class variable name", c);
+            compile_error(p, p->pm->version <= PM_OPTIONS_VERSION_CRUBY_3_3
+                          ? "`@@%c' is not allowed as a class variable name"
+                          : "'@@%c' is not allowed as a class variable name", c);
         }
         parser_show_error_line(p, &loc);
         set_yylval_noname();
@@ -9748,16 +9760,16 @@ parser_yylex(struct parser_params *p)
                 }
                 goto retry;
               case 'a':
-                if (peek_word_at(p, "nd", 2, 0)) goto leading_logical;
+                if (p->pm->version >= PM_OPTIONS_VERSION_CRUBY_4_0 && peek_word_at(p, "nd", 2, 0)) goto leading_logical;
                 goto bol;
               case 'o':
-                if (peek_word_at(p, "r", 1, 0)) goto leading_logical;
+                if (p->pm->version >= PM_OPTIONS_VERSION_CRUBY_4_0 && peek_word_at(p, "r", 1, 0)) goto leading_logical;
                 goto bol;
               case '|':
-                if (peek(p, '|')) goto leading_logical;
+                if (p->pm->version >= PM_OPTIONS_VERSION_CRUBY_4_0 && peek(p, '|')) goto leading_logical;
                 goto bol;
               case '&':
-                if (peek(p, '&')) {
+                if (p->pm->version >= PM_OPTIONS_VERSION_CRUBY_4_0 && peek(p, '&')) {
                   leading_logical:
                     pushback(p, c);
                     dispatch_delayed_token(p, tIGNORED_NL);
@@ -10216,6 +10228,10 @@ parser_yylex(struct parser_params *p)
         }
         pushback(p, c);
         if (IS_SPCARG(c)) {
+            /* https://bugs.ruby-lang.org/issues/21994: dropped in 4.1 */
+            if (p->pm->version <= PM_OPTIONS_VERSION_CRUBY_4_0) {
+                YWARN_TOKEN(PM_WARN_AMBIGUOUS_SLASH);
+            }
             p->lex.strterm = NEW_STRTERM(str_regexp, '/', 0);
             return tREGEXP_BEG;
         }
@@ -13401,11 +13417,14 @@ rb_node_attrasgn_new(struct parser_params *p, NODE *nd_recv, ID nd_mid, NODE *nd
          * action, the value appended by node_assign. */
         pm_node_flags_t flags = PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE;
         if (nd_recv != NULL && PM_NODE_TYPE_P(nd_recv, PM_SELF_NODE)) flags |= PM_CALL_NODE_FLAGS_IGNORE_VISIBILITY;
-        return (rb_node_attrasgn_t *) pm_call_node_new(
+        pm_call_node_t *call = pm_call_node_new(
             p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
             nd_recv, (pm_location_t) { 0 }, YID2CONST(nd_mid), (pm_location_t) { 0 },
             (pm_location_t) { 0 }, pm_yargs_from_list(p, nd_args),
             (pm_location_t) { 0 }, (pm_location_t) { 0 }, NULL);
+        /* a block argument was legal here until 3.4 and hangs off the call */
+        pm_yblock_pass_take(p, call);
+        return (rb_node_attrasgn_t *) call;
     }
 
     pm_node_flags_t flags = PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE;
@@ -14168,6 +14187,7 @@ gettable(struct parser_params *p, ID id, const YYLTYPE *loc)
     }
     switch (id_type(id)) {
       case ID_LOCAL:
+        if (id != 0 && id == p->ycur_arg) p->ycur_arg_used = 1;
         if (dyna_in_block(p) && dvar_defined_ref(p, id, &vidp)) {
             if (NUMPARAM_ID_P(id) && (numparam_nested_p(p) || it_used_p(p))) return 0;
             if (vidp) *vidp |= LVAR_USED;
@@ -14188,7 +14208,7 @@ gettable(struct parser_params *p, ID id, const YYLTYPE *loc)
             return node;
         }
         /* method call without arguments */
-        if (dyna_in_block(p) && id == idIt && !(DVARS_TERMINAL_P(p->lvtbl->args) || DVARS_TERMINAL_P(p->lvtbl->args->prev))) {
+        if (p->pm->version >= PM_OPTIONS_VERSION_CRUBY_3_4 && dyna_in_block(p) && id == idIt && !(DVARS_TERMINAL_P(p->lvtbl->args) || DVARS_TERMINAL_P(p->lvtbl->args->prev))) {
             if (numparam_used_p(p)) return 0;
             if (p->max_numparam == ORDINAL_PARAM) {
                 compile_error(p, "ordinary parameter is defined");
@@ -14733,13 +14753,13 @@ aryset_check(struct parser_params *p, NODE *args)
         }
     }
 
-    if (kwds != NULL) {
+    if (kwds != NULL && p->pm->version >= PM_OPTIONS_VERSION_CRUBY_3_4) {
         pm_diagnostic_list_append(
             &p->pm->metadata_arena, &p->pm->error_list,
             kwds->location.start, kwds->location.length,
             PM_ERR_UNEXPECTED_INDEX_KEYWORDS);
     }
-    if (block != NULL && PM_NODE_TYPE_P(block, PM_BLOCK_ARGUMENT_NODE)) {
+    if (block != NULL && PM_NODE_TYPE_P(block, PM_BLOCK_ARGUMENT_NODE) && p->pm->version >= PM_OPTIONS_VERSION_CRUBY_3_4) {
         pm_diagnostic_list_append(
             &p->pm->metadata_arena, &p->pm->error_list,
             block->location.start, block->location.length,
@@ -15327,6 +15347,62 @@ pm_ycond_literal_warn(struct parser_params *p, NODE *node, enum cond_type type, 
         node->location.start, node->location.length, diag_id, prefix, context);
 }
 
+/* Is the value being written inside a conditional a literal? Mirrors the
+ * hand parser's pm_conditional_predicate_warn_write_literal_p. */
+static bool
+pm_ywrite_literal_p(const pm_node_t *node)
+{
+    switch (PM_NODE_TYPE(node)) {
+      case PM_ARRAY_NODE: {
+        if (PM_NODE_FLAG_P(node, PM_NODE_FLAG_STATIC_LITERAL)) return true;
+        const pm_array_node_t *cast = (const pm_array_node_t *) node;
+        for (size_t index = 0; index < cast->elements.size; index++) {
+            if (!pm_ywrite_literal_p(cast->elements.nodes[index])) return false;
+        }
+        return true;
+      }
+      case PM_HASH_NODE: {
+        if (PM_NODE_FLAG_P(node, PM_NODE_FLAG_STATIC_LITERAL)) return true;
+        const pm_hash_node_t *cast = (const pm_hash_node_t *) node;
+        for (size_t index = 0; index < cast->elements.size; index++) {
+            const pm_node_t *element = cast->elements.nodes[index];
+            if (!PM_NODE_TYPE_P(element, PM_ASSOC_NODE)) return false;
+            const pm_assoc_node_t *assoc = (const pm_assoc_node_t *) element;
+            if (!pm_ywrite_literal_p(assoc->key) || !pm_ywrite_literal_p(assoc->value)) return false;
+        }
+        return true;
+      }
+      case PM_FALSE_NODE:
+      case PM_FLOAT_NODE:
+      case PM_IMAGINARY_NODE:
+      case PM_INTEGER_NODE:
+      case PM_NIL_NODE:
+      case PM_RATIONAL_NODE:
+      case PM_REGULAR_EXPRESSION_NODE:
+      case PM_SOURCE_ENCODING_NODE:
+      case PM_SOURCE_FILE_NODE:
+      case PM_SOURCE_LINE_NODE:
+      case PM_STRING_NODE:
+      case PM_SYMBOL_NODE:
+      case PM_TRUE_NODE:
+        return true;
+      default:
+        return false;
+    }
+}
+
+/* found '= literal' in conditional, should be == (the message keeps the 3.3
+ * spelling under that version) */
+static void
+pm_ywrite_literal_warn(struct parser_params *p, const pm_node_t *value)
+{
+    if (value == NULL || !pm_ywrite_literal_p(value)) return;
+    pm_diagnostic_list_append(
+        &p->pm->metadata_arena, &p->pm->warning_list,
+        value->location.start, value->location.length,
+        p->pm->version <= PM_OPTIONS_VERSION_CRUBY_3_3 ? PM_WARN_EQUAL_IN_CONDITIONAL_3_3 : PM_WARN_EQUAL_IN_CONDITIONAL);
+}
+
 /* Condition-position rewrites, as cond0 performs: a regexp matches against
  * $_, a range becomes a flip-flop, and the rewrite descends through the
  * boolean operators and parentheses the way CRuby's cond0 recurses. The
@@ -15381,6 +15457,24 @@ pm_ycond_regexp(struct parser_params *p, NODE *node, enum cond_type type)
       case PM_INTERPOLATED_STRING_NODE:
         pm_ycond_literal_warn(p, node, type, PM_WARN_LITERAL_IN_CONDITION_DEFAULT, "string ");
         return node;
+      case PM_CLASS_VARIABLE_WRITE_NODE:
+        pm_ywrite_literal_warn(p, ((pm_class_variable_write_node_t *) node)->value);
+        return node;
+      case PM_CONSTANT_WRITE_NODE:
+        pm_ywrite_literal_warn(p, ((pm_constant_write_node_t *) node)->value);
+        return node;
+      case PM_GLOBAL_VARIABLE_WRITE_NODE:
+        pm_ywrite_literal_warn(p, ((pm_global_variable_write_node_t *) node)->value);
+        return node;
+      case PM_INSTANCE_VARIABLE_WRITE_NODE:
+        pm_ywrite_literal_warn(p, ((pm_instance_variable_write_node_t *) node)->value);
+        return node;
+      case PM_LOCAL_VARIABLE_WRITE_NODE:
+        pm_ywrite_literal_warn(p, ((pm_local_variable_write_node_t *) node)->value);
+        return node;
+      case PM_MULTI_WRITE_NODE:
+        pm_ywrite_literal_warn(p, ((pm_multi_write_node_t *) node)->value);
+        return node;
       case PM_SYMBOL_NODE:
       case PM_INTERPOLATED_SYMBOL_NODE:
         pm_ycond_literal_warn(p, node, type, PM_WARN_LITERAL_IN_CONDITION_VERBOSE, "symbol ");
@@ -15423,6 +15517,101 @@ pm_ycond_regexp(struct parser_params *p, NODE *node, enum cond_type type)
       }
       default:
         return node;
+    }
+}
+
+/* circular argument reference - a parameter default that reads the parameter
+ * it is defining was an error until 3.4 */
+static void
+pm_ycircular_param_check(struct parser_params *p, ID name, uint32_t name_beg, uint32_t name_end)
+{
+    if (p->pm->version > PM_OPTIONS_VERSION_CRUBY_3_3) return;
+    if (p->ycur_arg == name && p->ycur_arg_used) {
+        const pm_constant_t *constant = pm_constant_pool_id_to_constant(&p->pm->constant_pool, pm_yid2const(p, name));
+        pm_diagnostic_list_append_format(
+            &p->pm->metadata_arena, &p->pm->error_list,
+            name_beg, name_end - name_beg,
+            PM_ERR_PARAMETER_CIRCULAR, (int) constant->length, (const char *) constant->start);
+    }
+    p->ycur_arg = 0;
+    p->ycur_arg_used = 0;
+}
+
+/* Before 4.0, an endless def used as a command argument could not itself have
+ * a command body: `private def foo = puts "x"` stopped at the argument. */
+static void
+pm_yendless_command_arg_check(struct parser_params *p, NODE *node)
+{
+    if (p->pm->version >= PM_OPTIONS_VERSION_CRUBY_4_0) return;
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_DEF_NODE)) return;
+    pm_def_node_t *def = (pm_def_node_t *) node;
+    if (def->body == NULL || !PM_NODE_TYPE_P(def->body, PM_STATEMENTS_NODE)) return;
+    pm_statements_node_t *statements = (pm_statements_node_t *) def->body;
+    if (statements->body.size != 1 || !PM_NODE_TYPE_P(statements->body.nodes[0], PM_CALL_NODE)) return;
+    pm_call_node_t *call = (pm_call_node_t *) statements->body.nodes[0];
+    if (call->arguments == NULL || call->opening_loc.length != 0) return;
+    pm_node_t *anchor = call->arguments->arguments.size > 0 ? call->arguments->arguments.nodes[0] : (pm_node_t *) call->arguments;
+    const char *kind = "expression";
+    switch (PM_NODE_TYPE(anchor)) {
+      case PM_STRING_NODE: case PM_INTERPOLATED_STRING_NODE: kind = "string literal"; break;
+      case PM_INTEGER_NODE: kind = "integer"; break;
+      case PM_FLOAT_NODE: kind = "float"; break;
+      case PM_SYMBOL_NODE: case PM_INTERPOLATED_SYMBOL_NODE: kind = "symbol literal"; break;
+      case PM_REGULAR_EXPRESSION_NODE: case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE: kind = "regular expression"; break;
+      default: break;
+    }
+    pm_diagnostic_list_append_format(
+        &p->pm->metadata_arena, &p->pm->error_list,
+        anchor->location.start, 1,
+        PM_ERR_EXPECT_EOL_AFTER_STATEMENT, kind);
+}
+
+/* Mirror of the hand parser's pm_def_node_receiver_check: a def receiver
+ * whose value lands on a literal is an error, however deeply the last
+ * statement is nested in parentheses. */
+static void
+pm_ysingleton_literal_check(struct parser_params *p, NODE *node)
+{
+    if (node == NULL) return;
+    switch (PM_NODE_TYPE(node)) {
+      case PM_BEGIN_NODE: {
+        pm_begin_node_t *cast = (pm_begin_node_t *) node;
+        if (cast->statements != NULL) pm_ysingleton_literal_check(p, (NODE *) cast->statements);
+        return;
+      }
+      case PM_PARENTHESES_NODE: {
+        pm_parentheses_node_t *cast = (pm_parentheses_node_t *) node;
+        if (cast->body != NULL) pm_ysingleton_literal_check(p, cast->body);
+        return;
+      }
+      case PM_STATEMENTS_NODE: {
+        pm_statements_node_t *cast = (pm_statements_node_t *) node;
+        if (cast->body.size > 0) pm_ysingleton_literal_check(p, cast->body.nodes[cast->body.size - 1]);
+        return;
+      }
+      case PM_STRING_NODE:
+      case PM_INTERPOLATED_STRING_NODE:
+      case PM_X_STRING_NODE:
+      case PM_INTERPOLATED_X_STRING_NODE:
+      case PM_REGULAR_EXPRESSION_NODE:
+      case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE:
+      case PM_SYMBOL_NODE:
+      case PM_INTERPOLATED_SYMBOL_NODE:
+      case PM_SOURCE_LINE_NODE:
+      case PM_SOURCE_FILE_NODE:
+      case PM_SOURCE_ENCODING_NODE:
+      case PM_INTEGER_NODE:
+      case PM_FLOAT_NODE:
+      case PM_RATIONAL_NODE:
+      case PM_IMAGINARY_NODE:
+      case PM_ARRAY_NODE:
+        pm_diagnostic_list_append(
+            &p->pm->metadata_arena, &p->pm->error_list,
+            node->location.start, node->location.length,
+            PM_ERR_SINGLETON_FOR_LITERALS);
+        return;
+      default:
+        return;
     }
 }
 
