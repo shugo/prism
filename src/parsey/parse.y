@@ -86,6 +86,7 @@
 #include <assert.h>
 #include <errno.h>
 #include <limits.h>
+#include <math.h>
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -1413,7 +1414,7 @@ static int parser_yyerror0(struct parser_params*, const char*);
 #define lex_eol_ptr_p(p,ptr) lex_eol_ptr_n_p(p,ptr,0)
 #define lex_eol_ptr_n_p(p,ptr,n) ((ptr)+(n) >= (p)->lex.pend)
 
-static void token_info_setup(token_info *ptinfo, const char *ptr, const rb_code_location_t *loc);
+static void token_info_setup(struct parser_params *p, token_info *ptinfo, const rb_code_location_t *loc);
 static void token_info_push(struct parser_params*, const char *token, const rb_code_location_t *loc);
 static void token_info_pop(struct parser_params*, const char *token, const rb_code_location_t *loc);
 static void token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_beg, int same, const rb_code_location_t *loc);
@@ -2069,6 +2070,7 @@ endless_method_name(struct parser_params *p, ID mid, const YYLTYPE *loc)
     if (is_attrset_id(mid)) {
         yyerror1(loc, "setter method cannot be defined in an endless method definition");
     }
+    token_info_drop(p, "def", (rb_code_position_t) { 0 });
 }
 
 #define debug_token_line(p, name, line) do { \
@@ -4345,12 +4347,10 @@ k_else		: keyword_else
                         int same = ptinfo_beg && strcmp(ptinfo_beg->token, "case") != 0;
                         token_info_warn(p, "else", p->token_info, same, &@$);
                         if (same) {
-                            /* token_info_setup is inert in the fork, so the
-                             * struct must not start uninitialized */
                             token_info e = { 0 };
                             e.next = ptinfo_beg->next;
                             e.token = "else";
-                            token_info_setup(&e, p->lex.pbeg, &@$);
+                            token_info_setup(p, &e, &@$);
                             if (!e.nonspc) *ptinfo_beg = e;
                         }
                     }
@@ -6235,34 +6235,94 @@ parser_isascii(struct parser_params *p)
     return ISASCII(*(p->lex.pcur-1));
 }
 
+/* Upstream measures the keyword's column against lex.pbeg with the lex-time
+ * line number carried in YYLTYPE. The fork's YYLTYPE is a pair of byte
+ * offsets, so instead scan back through the source to the start of the
+ * keyword's line -- exact regardless of lexer state -- and take the line
+ * number from ruby_sourceline as the action runs, which holds the keyword's
+ * line under the same default-reduction timing upstream relies on. */
 static void
-token_info_setup(token_info *ptinfo, const char *ptr, const rb_code_location_t *loc)
+token_info_setup(struct parser_params *p, token_info *ptinfo, const rb_code_location_t *loc)
 {
-    /* indentation warnings are not ported */
+    const char *source = (const char *) p->pm->start;
+    uint32_t line_start = loc->beg;
+    while (line_start > 0 && source[line_start - 1] != '\n') line_start--;
+
+    int column = 1, nonspc = 0;
+    for (uint32_t i = line_start; i < loc->beg; i++) {
+        if (source[i] == '\t') {
+            column = (((column - 1) / TAB_WIDTH) + 1) * TAB_WIDTH;
+        }
+        column++;
+        if (source[i] != ' ' && source[i] != '\t') {
+            nonspc = 1;
+        }
+    }
+
+    ptinfo->beg.lineno = p->ruby_sourceline;
+    ptinfo->beg.column = (int) (loc->beg - line_start);
+    ptinfo->indent = column;
+    ptinfo->nonspc = nonspc;
 }
 
 static void
 token_info_push(struct parser_params *p, const char *token, const rb_code_location_t *loc)
 {
-    /* indentation warnings are not ported */
+    token_info *ptinfo;
+
+    if (!p->token_info_enabled) return;
+    ptinfo = ALLOC(token_info);
+    ptinfo->token = token;
+    ptinfo->next = p->token_info;
+    token_info_setup(p, ptinfo, loc);
+
+    p->token_info = ptinfo;
 }
 
 static void
 token_info_pop(struct parser_params *p, const char *token, const rb_code_location_t *loc)
 {
-    /* indentation warnings are not ported */
+    token_info *ptinfo_beg = p->token_info;
+
+    if (!ptinfo_beg) return;
+
+    /* indentation check of matched keywords (begin..end, if..end, etc.) */
+    token_info_warn(p, token, ptinfo_beg, 1, loc);
+
+    p->token_info = ptinfo_beg->next;
+    ruby_xfree_sized(ptinfo_beg, sizeof(*ptinfo_beg));
 }
 
 static void
 token_info_drop(struct parser_params *p, const char *token, rb_code_position_t beg_pos)
 {
-    /* indentation warnings are not ported */
+    token_info *ptinfo_beg = p->token_info;
+
+    (void) token;
+    (void) beg_pos;
+    if (!ptinfo_beg) return;
+    p->token_info = ptinfo_beg->next;
+    ruby_xfree_sized(ptinfo_beg, sizeof(*ptinfo_beg));
 }
 
 static void
 token_info_warn(struct parser_params *p, const char *token, token_info *ptinfo_beg, int same, const rb_code_location_t *loc)
 {
-    /* indentation warnings are not ported */
+    token_info ptinfo_end_body, *ptinfo_end = &ptinfo_end_body;
+    if (!p->token_info_enabled) return;
+    if (!ptinfo_beg) return;
+    token_info_setup(p, ptinfo_end, loc);
+    if (ptinfo_beg->beg.lineno == ptinfo_end->beg.lineno) return; /* ignore one-line block */
+    if (ptinfo_beg->nonspc || ptinfo_end->nonspc) return; /* ignore keyword in the middle of a line */
+    if (ptinfo_beg->indent == ptinfo_end->indent) return; /* the indents are matched */
+    if (!same && ptinfo_beg->indent < ptinfo_end->indent) return;
+    pm_diagnostic_list_append_format(
+        &p->pm->metadata_arena, &p->pm->warning_list,
+        loc->beg, loc->end - loc->beg,
+        PM_WARN_INDENTATION_MISMATCH,
+        (int) strlen(token), token,
+        (int) strlen(ptinfo_beg->token), ptinfo_beg->token,
+        (int32_t) ptinfo_beg->beg.lineno);
 }
 
 static int
@@ -8407,9 +8467,15 @@ parser_prepare(struct parser_params *p)
     p->enc = rb_parser_str_get_encoding(p->lex.lastline);
 }
 
-#define ambiguous_operator(tok, op, syn) ( \
-    rb_warning0("'"op"' after local variable or literal is interpreted as binary operator"), \
-    rb_warning0("even though it seems like "syn""))
+/* fork: emit a prism warning spanning the current token. */
+#define YWARN_TOKEN(...) \
+    pm_diagnostic_list_append_format(&p->pm->metadata_arena, &p->pm->warning_list, \
+        YOFF(p->lex.ptok), (uint32_t) (p->lex.pcur - p->lex.ptok), __VA_ARGS__)
+
+/* upstream splits this into two rb_warning0 lines; the hand parser's single
+ * diagnostic carries both halves, so match it. */
+#define ambiguous_operator(tok, op, syn) \
+    YWARN_TOKEN(PM_WARN_AMBIGUOUS_BINARY_OPERATOR, op, syn)
 #define warn_balanced(tok, op, syn) ((void) \
     (!IS_lex_state_for(last_state, EXPR_CLASS|EXPR_DOT|EXPR_FNAME|EXPR_ENDFN) && \
      space_seen && !ISSPACE(c) && \
@@ -8648,9 +8714,26 @@ parse_numeric(struct parser_params *p, int c)
             type = tRATIONAL;
         }
         else {
-            strtod(tok(p), 0);
-            if (errno == ERANGE) {
-                rb_warning1("Float %s out of range", WARN_S(tok(p)));
+            errno = 0;
+            double value = strtod(tok(p), 0);
+            if (errno == ERANGE && isinf(value)) {
+                /* the hand parser truncates long tokens to 20 bytes with an
+                 * ellipsis; mirror it, over the source bytes of the token */
+                int warn_width;
+                const char *ellipsis;
+                uint32_t length = (uint32_t) (p->lex.pcur - p->lex.ptok);
+                if (length > 20) {
+                    warn_width = 20;
+                    ellipsis = "...";
+                }
+                else {
+                    warn_width = (int) length;
+                    ellipsis = "";
+                }
+                pm_diagnostic_list_append_format(
+                    &p->pm->metadata_arena, &p->pm->warning_list,
+                    YOFF(p->lex.ptok), length,
+                    PM_WARN_FLOAT_OUT_OF_RANGE, warn_width, (const char *) p->lex.ptok, ellipsis);
                 errno = 0;
             }
         }
@@ -9201,11 +9284,12 @@ parse_ident(struct parser_params *p, int c, int cmd_state)
 static void
 warn_cr(struct parser_params *p)
 {
-    if (!p->cr_seen) {
-        p->cr_seen = TRUE;
-        /* carried over with p->lex.nextline for nextc() */
-        rb_warn0("encountered \\r in middle of line, treated as a mere space");
-    }
+    /* upstream warns once per file (cr_seen); the hand parser warns at every
+     * occurrence, at the \r itself, so match it. */
+    pm_diagnostic_list_append_format(
+        &p->pm->metadata_arena, &p->pm->warning_list,
+        YOFF(p->lex.pcur) - 1, 1,
+        PM_WARN_UNEXPECTED_CARRIAGE_RETURN);
 }
 
 static enum yytokentype
@@ -9382,7 +9466,7 @@ parser_yylex(struct parser_params *p)
             }
             pushback(p, c);
             if (IS_SPCARG(c)) {
-                rb_warning0("'**' interpreted as argument prefix");
+                YWARN_TOKEN(PM_WARN_AMBIGUOUS_PREFIX_STAR_STAR);
                 c = tDSTAR;
             }
             else if (IS_BEG()) {
@@ -9400,7 +9484,7 @@ parser_yylex(struct parser_params *p)
             }
             pushback(p, c);
             if (IS_SPCARG(c)) {
-                rb_warning0("'*' interpreted as argument prefix");
+                YWARN_TOKEN(PM_WARN_AMBIGUOUS_PREFIX_STAR);
                 c = tSTAR;
             }
             else if (IS_BEG()) {
@@ -9590,7 +9674,7 @@ parser_yylex(struct parser_params *p)
                 (c = peekc_n(p, 1)) == -1 ||
                 !(c == '\'' || c == '"' ||
                   is_identchar(p, (p->lex.pcur+1), p->lex.pend, p->enc))) {
-                rb_warning0("'&' interpreted as argument prefix");
+                YWARN_TOKEN(PM_WARN_AMBIGUOUS_PREFIX_AMPERSAND);
             }
             c = tAMPER;
         }
@@ -9698,7 +9782,7 @@ parser_yylex(struct parser_params *p)
                     return tBDOT3;
                 }
                 if (p->lex.paren_nest == 0 && looking_at_eol_p(p)) {
-                    rb_warn0("... at EOL, should be parenthesized?");
+                    YWARN_TOKEN(PM_WARN_DOT_DOT_DOT_EOL);
                 }
                 return is_beg ? tBDOT3 : tDOT3;
             }
@@ -12871,6 +12955,25 @@ block_append(struct parser_params *p, NODE *head, NODE *tail)
     if (tail == NULL) return head;
 
     pm_statements_node_t *statements = pm_ystatements_ensure(p, head);
+
+    if (statements->body.size > 0) {
+        const pm_node_t *previous = statements->body.nodes[statements->body.size - 1];
+        switch (PM_NODE_TYPE(previous)) {
+          case PM_BREAK_NODE:
+          case PM_NEXT_NODE:
+          case PM_REDO_NODE:
+          case PM_RETRY_NODE:
+          case PM_RETURN_NODE:
+            pm_diagnostic_list_append_format(
+                &p->pm->metadata_arena, &p->pm->warning_list,
+                tail->location.start, tail->location.length,
+                PM_WARN_UNREACHABLE_STATEMENT);
+            break;
+          default:
+            break;
+        }
+    }
+
     pm_node_list_append(p->pm->arena, &statements->body, tail);
 
     if (statements->base.location.start == 0 && statements->base.location.length == 0) {
@@ -14190,42 +14293,99 @@ cond0(struct parser_params *p, NODE *node, enum cond_type type, const YYLTYPE *l
     return NULL;
 }
 
+/* A literal in condition position: the warn ids and prefixes mirror the
+ * hand-written parser's pm_parser_warn_conditional_predicate_literal so the
+ * messages and levels come out identical. COND_IN_OP (a `!`/`not` operand,
+ * the hand parser's NOT type) never warns. */
+static void
+pm_ycond_literal_warn(struct parser_params *p, NODE *node, enum cond_type type, pm_diagnostic_id_t diag_id, const char *prefix)
+{
+    const char *context;
+    switch (type) {
+      case COND_IN_COND: context = "condition"; break;
+      case COND_IN_FF: context = "flip-flop"; break;
+      default: return;
+    }
+    pm_diagnostic_list_append_format(
+        &p->pm->metadata_arena, &p->pm->warning_list,
+        node->location.start, node->location.length, diag_id, prefix, context);
+}
+
 /* Condition-position rewrites, as cond0 performs: a regexp matches against
  * $_, a range becomes a flip-flop, and the rewrite descends through the
- * boolean operators and parentheses the way CRuby's cond0 recurses. */
+ * boolean operators and parentheses the way CRuby's cond0 recurses. The
+ * literal warnings ride along, matching the hand parser's
+ * pm_conditional_predicate case for case. */
 static NODE*
-pm_ycond_regexp(struct parser_params *p, NODE *node)
+pm_ycond_regexp(struct parser_params *p, NODE *node, enum cond_type type)
 {
     if (node == NULL) return NULL;
     switch (PM_NODE_TYPE(node)) {
       case PM_REGULAR_EXPRESSION_NODE: {
         pm_regular_expression_node_t *regexp = (pm_regular_expression_node_t *) node;
+        if (!e_option_supplied(p)) {
+            pm_ycond_literal_warn(p, node, type, PM_WARN_LITERAL_IN_CONDITION_DEFAULT, "regex ");
+        }
         return (NODE *) pm_match_last_line_node_new(
             p->pm->arena, ++p->pm->node_id, regexp->base.flags, regexp->base.location,
             regexp->opening_loc, regexp->content_loc, regexp->closing_loc, regexp->unescaped);
       }
       case PM_INTERPOLATED_REGULAR_EXPRESSION_NODE: {
         pm_interpolated_regular_expression_node_t *regexp = (pm_interpolated_regular_expression_node_t *) node;
+        if (!e_option_supplied(p)) {
+            pm_ycond_literal_warn(p, node, type, PM_WARN_LITERAL_IN_CONDITION_VERBOSE, "regex ");
+        }
         return (NODE *) pm_interpolated_match_last_line_node_new(
             p->pm->arena, ++p->pm->node_id, regexp->base.flags, regexp->base.location,
             regexp->opening_loc, regexp->parts, regexp->closing_loc);
       }
       case PM_RANGE_NODE: {
         pm_range_node_t *range = (pm_range_node_t *) node;
+        range->left = pm_ycond_regexp(p, range->left, COND_IN_FF);
+        range->right = pm_ycond_regexp(p, range->right, COND_IN_FF);
         return (NODE *) pm_flip_flop_node_new(
             p->pm->arena, ++p->pm->node_id, range->base.flags, range->base.location,
             range->left, range->right, range->operator_loc);
       }
+      case PM_INTEGER_NODE:
+        if (type == COND_IN_FF) {
+            if (!e_option_supplied(p)) {
+                pm_diagnostic_list_append_format(
+                    &p->pm->metadata_arena, &p->pm->warning_list,
+                    node->location.start, node->location.length,
+                    PM_WARN_INTEGER_IN_FLIP_FLOP);
+            }
+        }
+        else {
+            pm_ycond_literal_warn(p, node, type, PM_WARN_LITERAL_IN_CONDITION_VERBOSE, "");
+        }
+        return node;
+      case PM_STRING_NODE:
+      case PM_SOURCE_FILE_NODE:
+      case PM_INTERPOLATED_STRING_NODE:
+        pm_ycond_literal_warn(p, node, type, PM_WARN_LITERAL_IN_CONDITION_DEFAULT, "string ");
+        return node;
+      case PM_SYMBOL_NODE:
+      case PM_INTERPOLATED_SYMBOL_NODE:
+        pm_ycond_literal_warn(p, node, type, PM_WARN_LITERAL_IN_CONDITION_VERBOSE, "symbol ");
+        return node;
+      case PM_SOURCE_LINE_NODE:
+      case PM_SOURCE_ENCODING_NODE:
+      case PM_FLOAT_NODE:
+      case PM_RATIONAL_NODE:
+      case PM_IMAGINARY_NODE:
+        pm_ycond_literal_warn(p, node, type, PM_WARN_LITERAL_IN_CONDITION_VERBOSE, "");
+        return node;
       case PM_AND_NODE: {
         pm_and_node_t *and_node = (pm_and_node_t *) node;
-        and_node->left = pm_ycond_regexp(p, and_node->left);
-        and_node->right = pm_ycond_regexp(p, and_node->right);
+        and_node->left = pm_ycond_regexp(p, and_node->left, COND_IN_COND);
+        and_node->right = pm_ycond_regexp(p, and_node->right, COND_IN_COND);
         return node;
       }
       case PM_OR_NODE: {
         pm_or_node_t *or_node = (pm_or_node_t *) node;
-        or_node->left = pm_ycond_regexp(p, or_node->left);
-        or_node->right = pm_ycond_regexp(p, or_node->right);
+        or_node->left = pm_ycond_regexp(p, or_node->left, COND_IN_COND);
+        or_node->right = pm_ycond_regexp(p, or_node->right, COND_IN_COND);
         return node;
       }
       case PM_PARENTHESES_NODE: {
@@ -14233,8 +14393,15 @@ pm_ycond_regexp(struct parser_params *p, NODE *node)
         if (parens->body != NULL && PM_NODE_TYPE_P(parens->body, PM_STATEMENTS_NODE)) {
             pm_statements_node_t *statements = (pm_statements_node_t *) parens->body;
             if (statements->body.size == 1) {
-                statements->body.nodes[0] = pm_ycond_regexp(p, statements->body.nodes[0]);
+                statements->body.nodes[0] = pm_ycond_regexp(p, statements->body.nodes[0], type);
             }
+        }
+        return node;
+      }
+      case PM_BEGIN_NODE: {
+        pm_begin_node_t *begin_node = (pm_begin_node_t *) node;
+        if (begin_node->statements != NULL && begin_node->statements->body.size == 1) {
+            begin_node->statements->body.nodes[0] = pm_ycond_regexp(p, begin_node->statements->body.nodes[0], type);
         }
         return node;
       }
@@ -14248,7 +14415,7 @@ cond(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 {
     (void) loc;
     if (node == 0) return 0;
-    return pm_ycond_regexp(p, node);
+    return pm_ycond_regexp(p, node, COND_IN_COND);
 }
 
 static NODE*
@@ -14256,7 +14423,7 @@ method_cond(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 {
     (void) loc;
     if (node == 0) return 0;
-    return pm_ycond_regexp(p, node);
+    return pm_ycond_regexp(p, node, COND_IN_OP);
 }
 
 static NODE*
