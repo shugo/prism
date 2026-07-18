@@ -5212,7 +5212,14 @@ p_top_expr_body : p_expr
                     }
                 | p_kwargs
                     {
-                        $$ = new_hash_pattern(p, 0, $1, &@$);
+                        /* a bare keyword pattern keeps the tail's own span,
+                         * which excludes a trailing comma */
+                        YYLTYPE loc = @$;
+                        if ($1 != NULL) {
+                            loc.beg = $1->location.start;
+                            loc.end = $1->location.start + $1->location.length;
+                        }
+                        $$ = new_hash_pattern(p, 0, $1, &loc);
                     }
                 ;
 
@@ -5435,7 +5442,10 @@ p_kwargs	: p_kwarg ',' p_any_kwrest
                     }
                 | p_kwarg ','
                     {
-                        $$ =  new_hash_pattern_tail(p, new_unique_key_hash(p, $1, &@$), 0, &@$);
+                        /* the pattern ends before the trailing comma, as the
+                         * hand parser spans it */
+                        YYLTYPE loc = { @1.beg, @1.end };
+                        $$ =  new_hash_pattern_tail(p, new_unique_key_hash(p, $1, &loc), 0, &loc);
                     }
                 | p_any_kwrest
                     {
@@ -12683,7 +12693,21 @@ rb_node_case3_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, const Y
         else {
             ((pm_match_predicate_node_t *) nd_body)->value = nd_head;
         }
-        nd_body->location = pm_yloc(loc);
+        {
+            /* the expression ends with the pattern; a trailing comma the
+             * grammar consumed stays outside, as the hand parser spans it */
+            pm_location_t location = pm_yloc(loc);
+            pm_node_t *pattern = PM_NODE_TYPE_P(nd_body, PM_MATCH_REQUIRED_NODE)
+                ? ((pm_match_required_node_t *) nd_body)->pattern
+                : ((pm_match_predicate_node_t *) nd_body)->pattern;
+            if (pattern != NULL) {
+                uint32_t pattern_end = pattern->location.start + pattern->location.length;
+                if (pattern_end > location.start && pattern_end < location.start + location.length) {
+                    location.length = pattern_end - location.start;
+                }
+            }
+            nd_body->location = location;
+        }
         return (rb_node_case3_t *) nd_body;
     }
 
