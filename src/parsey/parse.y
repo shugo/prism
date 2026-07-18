@@ -1083,6 +1083,36 @@ struct parser_params {
     ID ycur_arg;
     unsigned int ycur_arg_used:1;
 
+    /* fork: the non-associative binary expression that reduced last, for
+     * rewriting the syntax error its continuation produces the way the hand
+     * parser words it (1 == 2 == 3). klass: 1 eq-class, 2 range, 3 match. */
+    struct {
+        const char *op;
+        uint32_t expr_end;
+        unsigned int klass:2;
+        unsigned int endless:1;
+        unsigned int beginless:1;
+    } ynonassoc;
+
+    /* fork: a chained non-associative operator blocks the reduce, so the
+     * fields above never see it; the lexer tracks the pair instead. pending
+     * remembers the last such token and its bracket depth; hit is set while
+     * returning a same-class token at the same depth and consumed by the
+     * syntax error that token is about to raise. */
+    struct {
+        const char *op;
+        int depth;
+        unsigned int klass:2;
+        unsigned int beginless:1;
+        unsigned int active:1;
+    } ypending_nonassoc;
+    struct {
+        const char *prev_op;
+        unsigned int prev_beginless:1;
+        unsigned int active:1;
+    } ynonassoc_hit;
+    int ynonassoc_depth;
+
     /* fork: line-struct recycling. At most two line structs are live at once
      * (lastline/nextline, plus the one-token rewind of a fresh line), so
      * displaced lines sit out two generations in the graveyard ring and then
@@ -1642,6 +1672,7 @@ static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
 static void pm_ymarker_param(struct parser_params *p, NODE **slot, int kind, ID name, const YYLTYPE *mark_loc, const YYLTYPE *name_loc);
 static NODE *pm_ykw_param(struct parser_params *p, ID label, NODE *value, const YYLTYPE *label_loc, const YYLTYPE *loc);
 static void pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword);
+static void pm_ynonassoc_record(struct parser_params *p, unsigned int klass, const char *op, const YYLTYPE *loc);
 static void pm_ycircular_param_check(struct parser_params *p, ID name, uint32_t name_beg, uint32_t name_end);
 static void pm_yendless_command_arg_check(struct parser_params *p, NODE *node);
 static void pm_ysingleton_literal_check(struct parser_params *p, NODE *node);
@@ -10438,6 +10469,53 @@ yylex(YYSTYPE *lval, YYLTYPE *yylloc, struct parser_params *p)
     else if (t != END_OF_INPUT)
         dispatch_scan_event(p, t);
 
+    p->ynonassoc_hit.active = 0;
+    {
+        const char *op = NULL;
+        unsigned int klass = 0, beginless = 0;
+        switch ((int) t) {
+          case tEQ: op = "'=='"; klass = 1; break;
+          case tNEQ: op = "'!='"; klass = 1; break;
+          case tEQQ: op = "'==='"; klass = 1; break;
+          case tMATCH: op = "'=~'"; klass = 1; break;
+          case tNMATCH: op = "'!~'"; klass = 1; break;
+          case tCMP: op = "'<=>'"; klass = 1; break;
+          case tDOT2: op = ".."; klass = 2; break;
+          case tDOT3: op = "..."; klass = 2; break;
+          case tBDOT2: op = ".."; klass = 2; beginless = 1; break;
+          case tBDOT3: op = "..."; klass = 2; beginless = 1; break;
+          case '(': case tLPAREN: case tLPAREN_ARG: case '[': case tLBRACK:
+          case '{': case tLBRACE: case tLBRACE_ARG: case tLAMBEG: case tSTRING_DBEG:
+            p->ynonassoc_depth++;
+            break;
+          case ')': case ']': case '}': case tSTRING_DEND:
+            p->ynonassoc_depth--;
+            if (p->ypending_nonassoc.active && p->ynonassoc_depth < p->ypending_nonassoc.depth) {
+                p->ypending_nonassoc.active = 0;
+            }
+            break;
+          case '\n': case ';': case ',': case '=': case tOP_ASGN:
+            p->ypending_nonassoc.active = 0;
+            break;
+          default:
+            break;
+        }
+        if (op != NULL) {
+            if (p->ypending_nonassoc.active &&
+                p->ypending_nonassoc.depth == p->ynonassoc_depth &&
+                p->ypending_nonassoc.klass == klass) {
+                p->ynonassoc_hit.prev_op = p->ypending_nonassoc.op;
+                p->ynonassoc_hit.prev_beginless = p->ypending_nonassoc.beginless;
+                p->ynonassoc_hit.active = 1;
+            }
+            p->ypending_nonassoc.op = op;
+            p->ypending_nonassoc.depth = p->ynonassoc_depth;
+            p->ypending_nonassoc.klass = klass;
+            p->ypending_nonassoc.beginless = beginless;
+            p->ypending_nonassoc.active = 1;
+        }
+    }
+
     return t;
 }
 
@@ -12533,12 +12611,14 @@ rb_node_in_new(struct parser_params *p, NODE *nd_head, NODE *nd_body, NODE *nd_n
     /* the => and in expression forms funnel through NEW_IN with markers:
      * => passes the operator location, in passes true/false as body/next */
     if (operator_loc->end != operator_loc->beg) {
+        pm_ynonassoc_record(p, 3, "'=>'", loc);
         return (rb_node_in_t *) pm_match_required_node_new(
             p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
             NULL, nd_head, pm_yloc(operator_loc));
     }
     if (nd_body != NULL && PM_NODE_TYPE_P(nd_body, PM_TRUE_NODE) &&
         nd_next != NULL && PM_NODE_TYPE_P(nd_next, PM_FALSE_NODE)) {
+        pm_ynonassoc_record(p, 3, "'in'", loc);
         return (rb_node_in_t *) pm_match_predicate_node_new(
             p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
             NULL, nd_head, pm_yloc(in_keyword_loc));
@@ -12629,6 +12709,9 @@ rb_node_dot2_new(struct parser_params *p, NODE *nd_beg, NODE *nd_end, const YYLT
         (nd_end == NULL || PM_NODE_TYPE_P(nd_end, PM_INTEGER_NODE) || PM_NODE_TYPE_P(nd_end, PM_NIL_NODE))) {
         flags |= PM_NODE_FLAG_STATIC_LITERAL;
     }
+    pm_ynonassoc_record(p, 2, "..", loc);
+    p->ynonassoc.endless = nd_end == NULL;
+    p->ynonassoc.beginless = nd_beg == NULL;
     return (rb_node_dot2_t *) pm_range_node_new(
         p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
         nd_beg, nd_end, pm_yloc(operator_loc));
@@ -12642,6 +12725,9 @@ rb_node_dot3_new(struct parser_params *p, NODE *nd_beg, NODE *nd_end, const YYLT
         (nd_end == NULL || PM_NODE_TYPE_P(nd_end, PM_INTEGER_NODE) || PM_NODE_TYPE_P(nd_end, PM_NIL_NODE))) {
         flags |= PM_NODE_FLAG_STATIC_LITERAL;
     }
+    pm_ynonassoc_record(p, 2, "...", loc);
+    p->ynonassoc.endless = nd_end == NULL;
+    p->ynonassoc.beginless = nd_beg == NULL;
     return (rb_node_dot3_t *) pm_range_node_new(
         p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
         nd_beg, nd_end, pm_yloc(operator_loc));
@@ -13923,6 +14009,15 @@ call_bin_op(struct parser_params *p, NODE *recv, ID id, NODE *arg1,
                 const YYLTYPE *op_loc, const YYLTYPE *loc)
 {
     NODE *expr;
+    switch (id) {
+      case tEQ: pm_ynonassoc_record(p, 1, "'=='", loc); break;
+      case tNEQ: pm_ynonassoc_record(p, 1, "'!='", loc); break;
+      case tEQQ: pm_ynonassoc_record(p, 1, "'==='", loc); break;
+      case tMATCH: pm_ynonassoc_record(p, 1, "'=~'", loc); break;
+      case tNMATCH: pm_ynonassoc_record(p, 1, "'!~'", loc); break;
+      case tCMP: pm_ynonassoc_record(p, 1, "'<=>'", loc); break;
+      default: break;
+    }
     value_expr(p, recv);
     value_expr(p, arg1);
     {
@@ -17220,6 +17315,121 @@ rb_parser_set_location(struct parser_params *p, YYLTYPE *yylloc)
  * that themselves from the location, so only the message itself is kept.
  */
 
+/* Remember the operator of the non-associative binary expression reducing
+ * now; if its continuation errors on the very next token, the message leads
+ * with the hand parser's wording. */
+static void
+pm_ynonassoc_record(struct parser_params *p, unsigned int klass, const char *op, const YYLTYPE *loc)
+{
+    p->ynonassoc.op = op;
+    p->ynonassoc.expr_end = loc->end;
+    p->ynonassoc.klass = klass;
+    p->ynonassoc.endless = 0;
+    p->ynonassoc.beginless = 0;
+}
+
+static bool
+pm_ystr_in_set(const char *needle, const char *const *set)
+{
+    for (; *set != NULL; set++) {
+        if (strcmp(needle, *set) == 0) return true;
+    }
+    return false;
+}
+
+/* The hand parser's leading diagnostics for errors the generic yacc message
+ * would undersell: a non-associative operator chained onto another of its
+ * class, and `not` without parentheses. Emitted before the generic message,
+ * which then reads as the hand parser's own cascade. */
+static void
+pm_yerror_prepend_context(struct parser_params *p, const YYLTYPE *yylloc, const char *msg)
+{
+    /* not without parentheses: the state after `not` expects exactly '(' */
+    const char *expecting = strstr(msg, ", expecting '('");
+    if (expecting != NULL && expecting[15] == '\0') {
+        const uint8_t *cursor = p->pm->start + yylloc->beg;
+        while (cursor > p->pm->start && (cursor[-1] == ' ' || cursor[-1] == '\t' || cursor[-1] == '\n' || cursor[-1] == '\r')) cursor--;
+        if (cursor - p->pm->start >= 3 && memcmp(cursor - 3, "not", 3) == 0 &&
+            (cursor - p->pm->start == 3 || !ISALNUM(cursor[-4]))) {
+            pm_diagnostic_list_append(
+                &p->pm->metadata_arena, &p->pm->error_list,
+                yylloc->beg, yylloc->end - yylloc->beg,
+                PM_ERR_EXPECT_LPAREN_AFTER_NOT_OTHER);
+            return;
+        }
+    }
+
+    if (p->ylast_unexpected[0] == '\0') return;
+
+    /* a chained same-class pair the lexer flagged on this very token: the
+     * reduce was blocked, so this is the only record of the left operator */
+    if (p->ynonassoc_hit.active) {
+        if (p->ynonassoc_hit.prev_beginless) {
+            pm_diagnostic_list_append(
+                &p->pm->metadata_arena, &p->pm->error_list,
+                yylloc->beg, yylloc->end - yylloc->beg,
+                PM_ERR_UNEXPECTED_RANGE_OPERATOR);
+            return;
+        }
+        const char *unexpected = p->ylast_unexpected;
+        if (strcmp(unexpected, "'..'") == 0) unexpected = "..";
+        else if (strcmp(unexpected, "'...'") == 0) unexpected = "...";
+        pm_diagnostic_list_append_format(
+            &p->pm->metadata_arena, &p->pm->error_list,
+            yylloc->beg, yylloc->end - yylloc->beg,
+            PM_ERR_NON_ASSOCIATIVE_OPERATOR, unexpected, p->ynonassoc_hit.prev_op);
+        return;
+    }
+
+    if (p->ynonassoc.klass == 0) return;
+
+    /* the offending token must directly continue the recorded expression */
+    if (yylloc->beg < p->ynonassoc.expr_end) return;
+    for (const uint8_t *cursor = p->pm->start + p->ynonassoc.expr_end; cursor < p->pm->start + yylloc->beg; cursor++) {
+        if (*cursor != ' ' && *cursor != '\t') return;
+    }
+
+    static const char *const eq_class[] = { "'=='", "'!='", "'==='", "'=~'", "'!~'", "'<=>'", NULL };
+    static const char *const range_class[] = { "'..'", "'...'", NULL };
+    static const char *const match_class[] = { "'=>'", "'in'", NULL };
+    static const char *const endless_continuations[] = { "'&'", "'*'", "'.'", "'&.'", NULL };
+
+    const char *unexpected = p->ylast_unexpected;
+    bool hit = false;
+    bool chained_range = false;
+    switch (p->ynonassoc.klass) {
+      case 1: hit = pm_ystr_in_set(unexpected, eq_class); break;
+      case 3: hit = pm_ystr_in_set(unexpected, match_class); break;
+      case 2:
+        if (pm_ystr_in_set(unexpected, range_class)) {
+            hit = true;
+            chained_range = p->ynonassoc.beginless;
+        }
+        else if (p->ynonassoc.endless) {
+            hit = pm_ystr_in_set(unexpected, endless_continuations);
+        }
+        break;
+      default: break;
+    }
+    if (!hit) return;
+
+    if (chained_range) {
+        pm_diagnostic_list_append(
+            &p->pm->metadata_arena, &p->pm->error_list,
+            yylloc->beg, yylloc->end - yylloc->beg,
+            PM_ERR_UNEXPECTED_RANGE_OPERATOR);
+        return;
+    }
+
+    /* the hand parser prints range operators bare */
+    if (strcmp(unexpected, "'..'") == 0) unexpected = "..";
+    else if (strcmp(unexpected, "'...'") == 0) unexpected = "...";
+    pm_diagnostic_list_append_format(
+        &p->pm->metadata_arena, &p->pm->error_list,
+        yylloc->beg, yylloc->end - yylloc->beg,
+        PM_ERR_NON_ASSOCIATIVE_OPERATOR, unexpected, p->ynonassoc.op);
+}
+
 static int
 parser_yyerror(struct parser_params *p, const YYLTYPE *yylloc, const char *msg)
 {
@@ -17245,6 +17455,8 @@ parser_yyerror(struct parser_params *p, const YYLTYPE *yylloc, const char *msg)
             p->ylast_unexpected[length] = '\0';
         }
     }
+
+    pm_yerror_prepend_context(p, yylloc, msg);
 
     pm_diagnostic_list_append_format(
         &p->pm->metadata_arena, &p->pm->error_list,
