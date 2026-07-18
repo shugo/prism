@@ -1047,6 +1047,16 @@ struct parser_params {
     pm_diagnostic_t *ylast_syntax_diag;
     char ylast_unexpected[64];
 
+    /* fork: a heredoc's body stole the lines between the previous line and
+     * the current one; string content read across that seam splits there,
+     * so the parts keep their true, discontinuous spans. */
+    unsigned int ydiscontinuous: 1;
+    unsigned int ydiscont_pending: 1;
+    uint32_t ydiscont_seam;
+    /* a word's pre-seam chunk: %w elements must stay one token, so the
+     * chunks reunite as an interpolated carrier at the word's end */
+    NODE *yword_seam_head;
+
     /* fork: whether the last string-content token came from a squiggly
      * heredoc, whose per-line chunks must not be merged back together (the
      * strterm may already be restored when the reduction runs). */
@@ -1057,6 +1067,15 @@ struct parser_params {
      * escape >= 0x80 sets the source encoding. Reset when a literal or an
      * interpolation part begins. */
     rb_encoding *yexplicit_enc;
+
+    /* fork: unused-variable warning spans that are not simply the name at
+     * its declared offset (an interpolated regexp's named capture anchors at
+     * the whole receiver). Consulted by offset when warning. */
+    struct {
+        struct pm_ywarn_span { uint32_t beg; uint32_t len; } *entries;
+        size_t size;
+        size_t capacity;
+    } ywarn_spans;
 
     /* fork: the start offset of the variable name assignable() is declaring;
      * local_var records it in the used table (where CRuby stores the source
@@ -1600,7 +1619,9 @@ static NODE *pm_ypinned_var(struct parser_params *p, NODE *variable, const YYLTY
 static NODE *pm_ypattern_delims(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static ID pm_ysym_value_id(struct parser_params *p, NODE *node);
 static pm_location_t pm_yclosing(const YYLTYPE *closing);
+static pm_location_t pm_ycontent_between(uint32_t content_start, uint32_t closing_start);
 static NODE *pm_yistr(struct parser_params *p, NODE *part);
+static pm_string_t pm_ystr_take(struct parser_params *p, rb_parser_string_t *string);
 static NODE *pm_yindex_call(struct parser_params *p, NODE *node, const YYLTYPE *opening, const YYLTYPE *closing);
 static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
 static void pm_ymarker_param(struct parser_params *p, NODE **slot, int kind, ID name, const YYLTYPE *mark_loc, const YYLTYPE *name_loc);
@@ -6736,7 +6757,15 @@ nextline(struct parser_params *p, int set_encoding)
         p->heredoc_end = 0;
     }
     p->ruby_sourceline++;
-    set_lastline(p, str);
+    {
+        uint32_t prev_end = p->lex.pend != NULL ? YOFF(p->lex.pend) : 0;
+        set_lastline(p, str);
+        if (prev_end != 0 && YOFF(p->lex.pbeg) != prev_end) {
+            /* a heredoc consumed the lines in between */
+            p->ydiscontinuous = 1;
+            p->ydiscont_seam = prev_end;
+        }
+    }
     token_flush(p);
     return 0;
 }
@@ -7432,6 +7461,35 @@ tokadd_string(struct parser_params *p,
     (void)(erred || (parser_mixed_escape(p, beg, enc1, enc2), erred = true))
 
     while ((c = nextc(p)) != -1) {
+        if (p->ydiscontinuous) {
+            p->ydiscontinuous = 0;
+            if (toklen(p) > 0 && (func & STR_FUNC_QWORDS)) {
+                /* a word element must stay a single token: park the pre-seam
+                 * chunk and reunite at the word's end */
+                uint32_t start = p->delayed.active ? p->delayed.beg : YOFF(p->lex.ptok);
+                uint32_t end = p->ydiscont_seam;
+                if (end >= 2 && p->pm->start[end - 1] == '\n' && p->pm->start[end - 2] == '\\') end--;
+                tokfix(p);
+                rb_parser_string_t *chunk = STR_NEW3(tok(p), toklen(p), *encp, func);
+                pm_location_t chunk_loc = { start, end - start };
+                p->yword_seam_head = (NODE *) pm_string_node_new(
+                    p->pm->arena, ++p->pm->node_id, 0, chunk_loc,
+                    (pm_location_t) { 0 }, chunk_loc, (pm_location_t) { 0 },
+                    pm_ystr_take(p, chunk));
+                p->delayed.active = 0;
+                newtok(p);
+            }
+            else if (toklen(p) > 0 ||
+                     (p->delayed.active && p->delayed.beg < p->ydiscont_seam)) {
+                /* the lines in between belong to a heredoc: flush the chunk
+                 * read so far as its own part with its pre-seam span. Even an
+                 * empty chunk (a lone line-continuation backslash) becomes a
+                 * part, as in the hand parser. */
+                p->ydiscont_pending = 1;
+                pushback(p, c);
+                break;
+            }
+        }
         if (p->heredoc_indent > 0) {
             parser_update_heredoc_indent(p, c);
         }
@@ -7776,6 +7834,42 @@ parse_string(struct parser_params *p, rb_strterm_literal_t *quote)
     p->ycontent_squiggly = 0;
     set_yylval_str(lit);
     flush_string_content(p, enc, 0);
+
+    /* a word split at a heredoc seam reunites as a two-part carrier */
+    if (p->yword_seam_head != NULL && yylval.node != NULL && PM_NODE_TYPE_P(yylval.node, PM_STRING_NODE)) {
+        NODE *head = p->yword_seam_head;
+        NODE *tail = yylval.node;
+        p->yword_seam_head = NULL;
+        /* word fragments freeze like any interpolation part */
+        head->flags |= PM_NODE_FLAG_STATIC_LITERAL | PM_STRING_FLAGS_FROZEN;
+        tail->flags |= PM_NODE_FLAG_STATIC_LITERAL | PM_STRING_FLAGS_FROZEN;
+        pm_node_list_t parts = { 0 };
+        pm_node_list_append(p->pm->arena, &parts, head);
+        pm_node_list_append(p->pm->arena, &parts, tail);
+        uint32_t end = tail->location.start + tail->location.length;
+        pm_location_t span = { head->location.start, end - head->location.start };
+        yylval.node = (NODE *) pm_interpolated_string_node_new(
+            p->pm->arena, ++p->pm->node_id, 0, span,
+            (pm_location_t) { 0 }, parts, (pm_location_t) { 0 });
+    }
+
+    /* a chunk cut at a heredoc seam ends before the stolen lines, not at
+     * the resume position the delayed-token span ran to */
+    if (p->ydiscont_pending) {
+        p->ydiscont_pending = 0;
+        if (yylval.node != NULL && PM_NODE_TYPE_P(yylval.node, PM_STRING_NODE) &&
+            p->ydiscont_seam > yylval.node->location.start) {
+            uint32_t end = p->ydiscont_seam;
+            /* a line-continuation backslash ends the chunk before its
+             * newline in the hand parser's spans */
+            if (end >= 2 && p->pm->start[end - 1] == '\n' && p->pm->start[end - 2] == '\\') {
+                end--;
+            }
+            pm_location_t span = { yylval.node->location.start, end - yylval.node->location.start };
+            yylval.node->location = span;
+            ((pm_string_node_t *) yylval.node)->content_loc = span;
+        }
+    }
 
     return tSTRING_CONTENT;
 }
@@ -10422,7 +10516,7 @@ string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *openin
     if (node == NULL) {
         /* Empty contents: the node carries a zero-width content location
          * between the quotes, as the hand-written parser produces. */
-        pm_location_t content_loc = { opening->end, closing->beg - opening->end };
+        pm_location_t content_loc = pm_ycontent_between(opening->end, closing->beg);
         node = (NODE *) pm_string_node_new(
             p->pm->arena, ++p->pm->node_id, 0, content_loc,
             (pm_location_t) { 0 }, content_loc, (pm_location_t) { 0 },
@@ -10436,7 +10530,7 @@ string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *openin
         /* The lexer hands content over a line at a time, so the node's own
          * content location can cover just the last chunk; the full span is
          * everything between the quotes. */
-        string->content_loc = (pm_location_t) { opening->end, closing->beg - opening->end };
+        string->content_loc = pm_ycontent_between(opening->end, closing->beg);
         string->base.location = pm_yloc(loc);
         if (p->frozen_string_literal == 1) {
             node->flags |= PM_STRING_FLAGS_FROZEN | PM_NODE_FLAG_STATIC_LITERAL;
@@ -10692,6 +10786,15 @@ pm_yclosing(const YYLTYPE *closing)
 {
     if (closing->end == closing->beg) return (pm_location_t) { 0 };
     return (pm_location_t) { closing->end - 1, 1 };
+}
+
+/* The span between delimiters. An unterminated literal has no closing token
+ * (a zero location), which must not wrap into a four-gigabyte length. */
+static pm_location_t
+pm_ycontent_between(uint32_t content_start, uint32_t closing_start)
+{
+    uint32_t content_end = closing_start >= content_start ? closing_start : content_start;
+    return (pm_location_t) { content_start, content_end - content_start };
 }
 
 /* Attach the pending parentheses, if any, to the given call. */
@@ -13893,6 +13996,18 @@ pm_ymatch_capture(pm_parser_t *parser, const pm_string_t *capture, bool shared, 
         target->location = target_loc;
         pm_node_list_append(p->pm->arena, &data->targets, target);
     }
+    if (target_loc.length != length) {
+        /* the unused-variable warning must cover this same span */
+        if (p->ywarn_spans.size == p->ywarn_spans.capacity) {
+            size_t capacity = p->ywarn_spans.capacity == 0 ? 4 : p->ywarn_spans.capacity * 2;
+            struct pm_ywarn_span *entries = (struct pm_ywarn_span *) pm_arena_alloc(
+                &p->pm->metadata_arena, capacity * sizeof(struct pm_ywarn_span), PRISM_ALIGNOF(struct pm_ywarn_span));
+            if (p->ywarn_spans.size > 0) memcpy(entries, p->ywarn_spans.entries, p->ywarn_spans.size * sizeof(struct pm_ywarn_span));
+            p->ywarn_spans.entries = entries;
+            p->ywarn_spans.capacity = capacity;
+        }
+        p->ywarn_spans.entries[p->ywarn_spans.size++] = (struct pm_ywarn_span) { target_loc.start, target_loc.length };
+    }
 }
 
 static NODE*
@@ -13918,6 +14033,51 @@ match_op(struct parser_params *p, NODE *node1, NODE *node2, const YYLTYPE *op_lo
             return (NODE *) pm_match_write_node_new(
                 p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
                 (pm_call_node_t *) call, data.targets);
+        }
+    }
+    else if (node1 != NULL && PM_NODE_TYPE_P(node1, PM_INTERPOLATED_REGULAR_EXPRESSION_NODE)) {
+        /* an interpolated regexp that only contains strings (split by a
+         * heredoc): concatenate the parts and extract captures, targets
+         * anchored at the whole receiver, as the hand parser does */
+        pm_node_list_t *parts = &((pm_interpolated_regular_expression_node_t *) node1)->parts;
+        bool interpolated = false;
+        size_t total_length = 0;
+        for (size_t i = 0; i < parts->size; i++) {
+            if (PM_NODE_TYPE_P(parts->nodes[i], PM_STRING_NODE)) {
+                total_length += pm_string_length(&((pm_string_node_t *) parts->nodes[i])->unescaped);
+            }
+            else {
+                interpolated = true;
+                break;
+            }
+        }
+
+        if (!interpolated && total_length > 0) {
+            uint8_t *buffer = (uint8_t *) pm_arena_alloc(p->pm->arena, total_length + 1, 1);
+            uint8_t *cursor = buffer;
+            for (size_t i = 0; i < parts->size; i++) {
+                pm_string_t *unescaped = &((pm_string_node_t *) parts->nodes[i])->unescaped;
+                memcpy(cursor, pm_string_source(unescaped), pm_string_length(unescaped));
+                cursor += pm_string_length(unescaped);
+            }
+            buffer[total_length] = '\0';
+
+            pm_ymatch_data_t data = { { (pm_call_node_t *) call, NULL, { 0 } }, p, NULL, 0, { 0 }, { 0 }, { 0 } };
+            data.content = buffer;
+            data.content_length = total_length;
+            data.content_loc = (pm_location_t) { 0 };
+            data.receiver_loc = node1->location;
+
+            pm_regexp_parse_named_captures(
+                p->pm, data.content, data.content_length, false,
+                PM_NODE_FLAG_P(node1, PM_REGULAR_EXPRESSION_FLAGS_EXTENDED),
+                pm_ymatch_capture, &data.base);
+
+            if (data.targets.size > 0) {
+                return (NODE *) pm_match_write_node_new(
+                    p->pm->arena, ++p->pm->node_id, 0, pm_yloc(loc),
+                    (pm_call_node_t *) call, data.targets);
+            }
         }
     }
 
@@ -14103,9 +14263,24 @@ symbol_append(struct parser_params *p, NODE *symbols, NODE *symbol)
                                 PM_NODE_TYPE_P(symbol, PM_EMBEDDED_STATEMENTS_NODE) ||
                                 PM_NODE_TYPE_P(symbol, PM_EMBEDDED_VARIABLE_NODE))) {
         if (!PM_NODE_TYPE_P(symbol, PM_INTERPOLATED_STRING_NODE)) symbol = pm_yistr(p, symbol);
+        pm_node_list_t parts = ((pm_interpolated_string_node_t *) symbol)->parts;
+        pm_node_flags_t flags = 0;
+        pm_location_t location = symbol->location;
+        /* a word split at a heredoc seam: the hand parser gives the resumed
+         * chunk the pre-seam chunk's span, and the symbol stays static */
+        if (parts.size == 2 &&
+            PM_NODE_TYPE_P(parts.nodes[0], PM_STRING_NODE) && PM_NODE_TYPE_P(parts.nodes[1], PM_STRING_NODE) &&
+            parts.nodes[1]->location.start > parts.nodes[0]->location.start + parts.nodes[0]->location.length) {
+            pm_string_node_t *head = (pm_string_node_t *) parts.nodes[0];
+            pm_string_node_t *tail = (pm_string_node_t *) parts.nodes[1];
+            tail->base.location = head->base.location;
+            tail->content_loc = head->content_loc;
+            location = head->base.location;
+            flags = PM_NODE_FLAG_STATIC_LITERAL;
+        }
         symbol = (NODE *) pm_interpolated_symbol_node_new(
-            p->pm->arena, ++p->pm->node_id, 0, symbol->location,
-            (pm_location_t) { 0 }, ((pm_interpolated_string_node_t *) symbol)->parts, (pm_location_t) { 0 });
+            p->pm->arena, ++p->pm->node_id, flags, location,
+            (pm_location_t) { 0 }, parts, (pm_location_t) { 0 });
     }
     else {
         YSTUB("symbol_append");
@@ -14144,7 +14319,7 @@ new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc,
 
     pm_location_t opening = pm_yloc(opening_loc);
     pm_location_t closing = pm_yloc(closing_loc);
-    pm_location_t content = { opening.start + opening.length, closing.start - (opening.start + opening.length) };
+    pm_location_t content = pm_ycontent_between(opening.start + opening.length, closing.start);
 
     if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
         pm_string_t unescaped = PM_STRING_EMPTY;
@@ -14219,7 +14394,7 @@ new_xstring(struct parser_params *p, NODE *node, const YYLTYPE *opening_loc, con
 {
     pm_location_t opening = pm_yloc(opening_loc);
     pm_location_t closing = pm_yloc(closing_loc);
-    pm_location_t content = { opening.start + opening.length, closing.start - (opening.start + opening.length) };
+    pm_location_t content = pm_ycontent_between(opening.start + opening.length, closing.start);
     pm_location_t node_loc = pm_yloc(loc);
 
     /* a <<`CMD` heredoc: spans from the parked capture, opener as the span */
@@ -15563,7 +15738,7 @@ dsym_node(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 
     pm_location_t opening = { location.start, open_width };
     pm_location_t closing = { location.start + location.length - close_width, close_width };
-    pm_location_t value = { opening.start + open_width, closing.start - (opening.start + open_width) };
+    pm_location_t value = pm_ycontent_between(opening.start + open_width, closing.start);
 
     if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
         pm_string_t unescaped = PM_STRING_EMPTY;
@@ -15593,10 +15768,18 @@ dsym_node(struct parser_params *p, NODE *node, const YYLTYPE *loc)
         node = pm_yistr(p, node);
     }
     if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) {
+        /* the carrier's static state carries over; a symbol whose parts are
+         * all plain strings (split only by a heredoc seam) is static too */
+        pm_node_flags_t flags = node->flags & PM_NODE_FLAG_STATIC_LITERAL;
+        pm_node_list_t *parts = &((pm_interpolated_string_node_t *) node)->parts;
+        bool all_strings = true;
+        for (size_t i = 0; i < parts->size; i++) {
+            if (!PM_NODE_TYPE_P(parts->nodes[i], PM_STRING_NODE)) all_strings = false;
+        }
+        if (all_strings) flags |= PM_NODE_FLAG_STATIC_LITERAL;
         return (NODE *) pm_interpolated_symbol_node_new(
-            p->pm->arena, ++p->pm->node_id,
-            node->flags & PM_NODE_FLAG_STATIC_LITERAL, location,
-            opening, ((pm_interpolated_string_node_t *) node)->parts, closing);
+            p->pm->arena, ++p->pm->node_id, flags, location,
+            opening, *parts, closing);
     }
 
     YSTUB("dsym_node");
@@ -15901,9 +16084,16 @@ warn_unused_var(struct parser_params *p, struct local_vars *local)
         if (!v[i] || (u[i] & LVAR_USED)) continue;
         if (is_private_local_id(p, v[i])) continue;
         const pm_constant_t *name = pm_constant_pool_id_to_constant(&p->pm->constant_pool, pm_yid2const(p, v[i]));
+        uint32_t warn_length = (uint32_t) name->length;
+        for (size_t s = 0; s < p->ywarn_spans.size; s++) {
+            if (p->ywarn_spans.entries[s].beg == (uint32_t) u[i]) {
+                warn_length = p->ywarn_spans.entries[s].len;
+                break;
+            }
+        }
         pm_diagnostic_list_append_format(
             &p->pm->metadata_arena, &p->pm->warning_list,
-            (uint32_t) u[i], (uint32_t) name->length,
+            (uint32_t) u[i], warn_length,
             PM_WARN_UNUSED_LOCAL_VARIABLE, (int) name->length, (const char *) name->start);
     }
     return;

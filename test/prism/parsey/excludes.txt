@@ -9,7 +9,4 @@
 # lexing corner.
 begin_ensure.txt
 regex.txt
-seattlerb/difficult0_.txt
-seattlerb/heredoc_nested.txt
 spanning_heredoc_newlines.txt
-spanning_heredoc.txt
