@@ -7,26 +7,8 @@
 # duplicate pattern-variable detection, some invalid-code checks) and are
 # kept excluded rather than ported.
 begin_ensure.txt
-dash_heredocs.txt
-defined.txt
-encoding_binary.txt
-heredoc_percent_q_newline_delimiter.txt
-heredocs_leading_whitespace.txt
-heredocs_nested.txt
-multi_write.txt
-patterns.txt
 regex.txt
-seattlerb/case_in.txt
 seattlerb/difficult0_.txt
-seattlerb/dstr_evstr.txt
-seattlerb/dstr_str.txt
 seattlerb/heredoc_nested.txt
-seattlerb/pct_w_heredoc_interp_nested.txt
-seattlerb/str_str_str.txt
-seattlerb/str_str.txt
 spanning_heredoc_newlines.txt
 spanning_heredoc.txt
-unparser/corpus/literal/defined.txt
-unparser/corpus/literal/literal.txt
-whitequark/dedenting_heredoc.txt
-whitequark/newline_in_hash_argument.txt
