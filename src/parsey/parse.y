@@ -1673,6 +1673,7 @@ static void pm_ymarker_param(struct parser_params *p, NODE **slot, int kind, ID 
 static NODE *pm_ykw_param(struct parser_params *p, ID label, NODE *value, const YYLTYPE *label_loc, const YYLTYPE *loc);
 static void pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword);
 static void pm_ynonassoc_record(struct parser_params *p, unsigned int klass, const char *op, const YYLTYPE *loc);
+static NODE *pm_ymissing_operand(struct parser_params *p, const YYLTYPE *op_loc, const YYLTYPE *error_loc);
 static void pm_ycircular_param_check(struct parser_params *p, ID name, uint32_t name_beg, uint32_t name_end);
 static void pm_yendless_command_arg_check(struct parser_params *p, NODE *node);
 static void pm_ysingleton_literal_check(struct parser_params *p, NODE *node);
@@ -2516,7 +2517,10 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
 
 %}
 
-%expect 0
+/* fork: the two error-recovery alternatives for brace blocks conflict with
+ * statement-level recovery inside the block body; the shift resolution
+ * prefers the inner recovery, which is the intended nesting order. */
+%expect 2
 %define api.pure
 %define parse.error verbose
 
@@ -3270,9 +3274,17 @@ expr		: command_call
                     {
                         $$ = logop(p, idAND, $left, $right, &@op, &@$);
                     }
+                | expr[left] keyword_and[op] error
+                    {
+                        $$ = logop(p, idAND, $left, pm_ymissing_operand(p, &@op, &@3), &@op, &@$);
+                    }
                 | expr[left] keyword_or[op] expr[right]
                     {
                         $$ = logop(p, idOR, $left, $right, &@op, &@$);
+                    }
+                | expr[left] keyword_or[op] error
+                    {
+                        $$ = logop(p, idOR, $left, pm_ymissing_operand(p, &@op, &@3), &@op, &@$);
                     }
                 | keyword_not[not] '\n'? expr[arg]
                     {
@@ -3375,6 +3387,11 @@ block_command	: block_call
                 ;
 
 cmd_brace_block	: tLBRACE_ARG brace_body '}'
+                    {
+                        $$ = $2;
+                        set_embraced_location($$, &@1, &@3);
+                    }
+                | tLBRACE_ARG brace_body error
                     {
                         $$ = $2;
                         set_embraced_location($$, &@1, &@3);
@@ -3699,25 +3716,61 @@ arg		: asgn(arg_rhs)
                     {
                         $$ = call_bin_op(p, $1, '+', $3, &@2, &@$);
                     }
+                | arg '+' error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, '+', pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | arg '-' arg
                     {
                         $$ = call_bin_op(p, $1, '-', $3, &@2, &@$);
+                    }
+                | arg '-' error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, '-', pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
                     }
                 | arg '*' arg
                     {
                         $$ = call_bin_op(p, $1, '*', $3, &@2, &@$);
                     }
+                | arg '*' error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, '*', pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | arg '/' arg
                     {
                         $$ = call_bin_op(p, $1, '/', $3, &@2, &@$);
+                    }
+                | arg '/' error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, '/', pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
                     }
                 | arg '%' arg
                     {
                         $$ = call_bin_op(p, $1, '%', $3, &@2, &@$);
                     }
+                | arg '%' error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, '%', pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | arg tPOW arg
                     {
                         $$ = call_bin_op(p, $1, idPow, $3, &@2, &@$);
+                    }
+                | arg tPOW error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, idPow, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
                     }
                 | tUMINUS_NUM simple_numeric tPOW arg
                     {
@@ -3738,38 +3791,92 @@ arg		: asgn(arg_rhs)
                     {
                         $$ = call_bin_op(p, $1, '|', $3, &@2, &@$);
                     }
+                | arg '|' error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, '|', pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | arg '^' arg
                     {
                         $$ = call_bin_op(p, $1, '^', $3, &@2, &@$);
+                    }
+                | arg '^' error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, '^', pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
                     }
                 | arg '&' arg
                     {
                         $$ = call_bin_op(p, $1, '&', $3, &@2, &@$);
                     }
+                | arg '&' error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, '&', pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | arg tCMP arg
                     {
                         $$ = call_bin_op(p, $1, idCmp, $3, &@2, &@$);
+                    }
+                | arg tCMP error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, idCmp, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
                     }
                 | rel_expr   %prec tCMP
                 | arg tEQ arg
                     {
                         $$ = call_bin_op(p, $1, idEq, $3, &@2, &@$);
                     }
+                | arg tEQ error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, idEq, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | arg tEQQ arg
                     {
                         $$ = call_bin_op(p, $1, idEqq, $3, &@2, &@$);
+                    }
+                | arg tEQQ error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, idEqq, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
                     }
                 | arg tNEQ arg
                     {
                         $$ = call_bin_op(p, $1, idNeq, $3, &@2, &@$);
                     }
+                | arg tNEQ error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, idNeq, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | arg tMATCH arg
                     {
                         $$ = match_op(p, $1, $3, &@2, &@$);
                     }
+                | arg tMATCH error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = match_op(p, $1, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | arg tNMATCH arg
                     {
                         $$ = call_bin_op(p, $1, idNeqTilde, $3, &@2, &@$);
+                    }
+                | arg tNMATCH error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, idNeqTilde, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
                     }
                 | '!' arg
                     {
@@ -3783,17 +3890,41 @@ arg		: asgn(arg_rhs)
                     {
                         $$ = call_bin_op(p, $1, idLTLT, $3, &@2, &@$);
                     }
+                | arg tLSHFT error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, idLTLT, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | arg tRSHFT arg
                     {
                         $$ = call_bin_op(p, $1, idGTGT, $3, &@2, &@$);
+                    }
+                | arg tRSHFT error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = call_bin_op(p, $1, idGTGT, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
                     }
                 | arg tANDOP arg
                     {
                         $$ = logop(p, idANDOP, $1, $3, &@2, &@$);
                     }
+                | arg tANDOP error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = logop(p, idANDOP, $1, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | arg tOROP arg
                     {
                         $$ = logop(p, idOROP, $1, $3, &@2, &@$);
+                    }
+                | arg tOROP error
+                    {
+                        /* fork: a missing right operand recovers the way the
+                         * hand parser does, with a zero-width error node */
+                        $$ = logop(p, idOROP, $1, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
                     }
                 | keyword_defined '\n'? begin_defined arg
                     {
@@ -3840,10 +3971,18 @@ rel_expr	: arg relop arg   %prec '>'
                     {
                         $$ = call_bin_op(p, $1, $2, $3, &@2, &@$);
                     }
+                | arg relop error   %prec '>'
+                    {
+                        $$ = call_bin_op(p, $1, $2, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
+                    }
                 | rel_expr relop arg   %prec '>'
                     {
                         rb_warning1("comparison '%s' after comparison", WARN_ID($2));
                         $$ = call_bin_op(p, $1, $2, $3, &@2, &@$);
+                    }
+                | rel_expr relop error   %prec '>'
+                    {
+                        $$ = call_bin_op(p, $1, $2, pm_ymissing_operand(p, &@2, &@3), &@2, &@$);
                     }
                 ;
 
@@ -4138,10 +4277,24 @@ primary		: inline_primary
                     $$ = make_list($args, &@$);
                     $$ = pm_yarray_brackets(p, $$, &@1, &@3, &@$);
                 }
+            | tLBRACK aref_args[args] error
+                {
+                    /* fork: unclosed array literal; keep the elements */
+                    pm_yerror_replace_last(p, PM_ERR_ARRAY_TERM);
+                    $$ = make_list($args, &@$);
+                    $$ = pm_yarray_brackets(p, $$, &@1, &NULL_LOC, &@$);
+                }
             | tLBRACE assoc_list[list] '}'
                 {
                     $$ = new_hash(p, $list, &@$);
                     $$ = pm_yhash_braces(p, $$, &@1, &@3, &@$);
+                }
+            | tLBRACE assoc_list[list] error
+                {
+                    /* fork: unclosed hash literal; keep the pairs */
+                    pm_yerror_replace_last(p, PM_ERR_HASH_TERM);
+                    $$ = new_hash(p, $list, &@$);
+                    $$ = pm_yhash_braces(p, $$, &@1, &NULL_LOC, &@$);
                 }
             | k_return[kw]
                 {
@@ -4895,10 +5048,24 @@ method_call	: fcall paren_args
                         $$ = pm_yindex_call(p, $$, &@2, &@4);
                         fixpos($$, $1);
                     }
+                | primary_value '[' opt_call_args error
+                    {
+                        /* fork: unclosed index; keep the receiver and args */
+                        pm_yerror_replace_last(p, PM_ERR_EXPECT_RBRACKET);
+                        $$ = NEW_CALL($1, tAREF, $3, &@$);
+                        $$ = pm_yindex_call(p, $$, &@2, &NULL_LOC);
+                        fixpos($$, $1);
+                    }
                 ;
 
 brace_block	: '{' brace_body '}'
                     {
+                        $$ = $2;
+                        set_embraced_location($$, &@1, &@3);
+                    }
+                | '{' brace_body error
+                    {
+                        /* fork: unclosed block; keep body and parameters */
                         $$ = $2;
                         set_embraced_location($$, &@1, &@3);
                     }
@@ -17314,6 +17481,17 @@ rb_parser_set_location(struct parser_params *p, YYLTYPE *yylloc)
  * renders the offending source line into the message; prism's consumers do
  * that themselves from the location, so only the message itself is kept.
  */
+
+/* A missing right operand: the hand parser's zero-ish error node in place
+ * of the operand, with its wording. Anchored at the offending token, or at
+ * the operator when the input just ends. */
+static NODE *
+pm_ymissing_operand(struct parser_params *p, const YYLTYPE *op_loc, const YYLTYPE *error_loc)
+{
+    pm_yerror_replace_last(p, PM_ERR_EXPECT_EXPRESSION_AFTER_OPERATOR);
+    YYLTYPE loc = (error_loc->end > error_loc->beg) ? *error_loc : *op_loc;
+    return NEW_ERROR(&loc);
+}
 
 /* Remember the operator of the non-associative binary expression reducing
  * now; if its continuation errors on the very next token, the message leads
