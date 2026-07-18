@@ -396,6 +396,7 @@ typedef struct rb_strterm_heredoc_struct {
     unsigned length;	/* the length of END in `<<"END"` */
     uint8_t quote;
     uint8_t func;
+    uint8_t ysquiggly;		/* fork: a <<~ heredoc keeps per-line parts */
     uint32_t ycontent_beg;	/* fork: offset of the first body line */
 } rb_strterm_heredoc_t;
 
@@ -1045,6 +1046,12 @@ struct parser_params {
      * rewrite it into the hand parser's wording. */
     pm_diagnostic_t *ylast_syntax_diag;
     char ylast_unexpected[64];
+
+    /* fork: the encoding an escape sequence in the current literal forced,
+     * mirroring the hand parser's explicit_encoding: \u sets UTF-8, a byte
+     * escape >= 0x80 sets the source encoding. Reset when a literal or an
+     * interpolation part begins. */
+    rb_encoding *yexplicit_enc;
 
     /* fork: the start offset of the variable name assignable() is declaring;
      * local_var records it in the used table (where CRuby stores the source
@@ -5532,6 +5539,7 @@ string_content	: tSTRING_CONTENT[content]
                         $$ = p->lex.strterm;
                         p->lex.strterm = 0;
                         SET_LEX_STATE(EXPR_BEG);
+                        p->yexplicit_enc = NULL;
                     }[strterm]<strterm>
                   string_dvar[dvar]
                     {
@@ -5547,6 +5555,7 @@ string_content	: tSTRING_CONTENT[content]
                         $$ = p->lex.strterm;
                         p->lex.strterm = 0;
                         SET_LEX_STATE(EXPR_BEG);
+                        p->yexplicit_enc = NULL;
                     }[term]<strterm>
                     {
                         $$ = p->lex.brace_nest;
@@ -6018,6 +6027,10 @@ opt_comma	: ','?
 singleton	: value_expr(singleton_expr)
                     {
                         NODE *expr = last_expr_node($1);
+                        if (expr != NULL && PM_NODE_TYPE_P(expr, PM_PARENTHESES_NODE)) {
+                            pm_parentheses_node_t *parens = (pm_parentheses_node_t *) expr;
+                            if (parens->body != NULL) expr = parens->body;
+                        }
                         switch (PM_NODE_TYPE(expr)) {
                           case PM_STRING_NODE:
                           case PM_INTERPOLATED_STRING_NODE:
@@ -6053,10 +6066,16 @@ singleton_expr	: var_ref
                         SET_LEX_STATE(EXPR_BEG);
                         p->ctxt.in_argdef = 0;
                     }
-                  expr rparen
+                  expr rparen[rpar]
                     {
                         p->ctxt.in_argdef = 1;
-                        $$ = $3;
+                        /* the hand parser keeps the parentheses around the
+                         * singleton expression, with the bare expression as
+                         * the body (no statements wrapper) */
+                        pm_location_t parens_loc = { @1.beg, @rpar.end - @1.beg };
+                        $$ = (NODE *) pm_parentheses_node_new(
+                            p->pm->arena, ++p->pm->node_id, 0, parens_loc,
+                            $3, pm_yloc(&@1), pm_yclosing(&@rpar));
                     }
                 ;
 
@@ -6640,6 +6659,7 @@ static rb_strterm_t *
 new_strterm(struct parser_params *p, int func, int term, int paren)
 {
     rb_strterm_t *strterm = ZALLOC(rb_strterm_t);
+    p->yexplicit_enc = NULL;
     strterm->u.literal.func = func;
     strterm->u.literal.term = term;
     strterm->u.literal.paren = paren;
@@ -6652,6 +6672,7 @@ static rb_strterm_t *
 new_heredoc(struct parser_params *p)
 {
     rb_strterm_t *strterm = ZALLOC(rb_strterm_t);
+    p->yexplicit_enc = NULL;
     strterm->heredoc = true;
     return strterm;
 }
@@ -6898,6 +6919,7 @@ tokadd_codepoint(struct parser_params *p, rb_encoding **encp,
             return wide;
         }
         *encp = utf8;
+        p->yexplicit_enc = utf8;
         tokaddmbc(p, codepoint, *encp);
     }
     else {
@@ -7486,6 +7508,9 @@ tokadd_string(struct parser_params *p,
                     pushback(p, c);
                     if (func & STR_FUNC_ESCAPE) tokadd(p, '\\');
                     c = read_escape(p, 0, p->lex.pcur - 1);
+                    /* an escaped byte past 0x7f locks in the source encoding
+                     * (the hand parser's escape_write_byte_encoded) */
+                    if (c >= 0x80) p->yexplicit_enc = *encp;
                 }
                 else if ((func & STR_FUNC_QWORDS) && ISSPACE(c)) {
                     /* ignore backslashed spaces in %w */
@@ -7665,6 +7690,7 @@ parse_string(struct parser_params *p, rb_strterm_literal_t *quote)
     if ((func & STR_FUNC_QWORDS) && ISSPACE(c)) {
         while (c != '\n' && ISSPACE(c = nextc(p)));
         space = 1;
+        p->yexplicit_enc = NULL;
     }
     if (func & STR_FUNC_LIST) {
         quote->func &= ~STR_FUNC_LIST;
@@ -7815,6 +7841,7 @@ heredoc_identifier(struct parser_params *p)
     here->length = (unsigned)len;
     here->quote = quote;
     here->func = func;
+    here->ysquiggly = indent > 0;
     here->lastline = p->lex.lastline;
 
     token_flush(p);
@@ -7905,16 +7932,28 @@ heredoc_dedent(struct parser_params *p, NODE *root)
     }
 
     if (PM_NODE_TYPE_P(root, PM_INTERPOLATED_STRING_NODE)) {
-        pm_node_list_t parts = ((pm_interpolated_string_node_t *) root)->parts;
-        for (size_t i = 0; i < parts.size; i++) {
-            pm_node_t *part = parts.nodes[i];
-            if (!PM_NODE_TYPE_P(part, PM_STRING_NODE) || !PM_NODE_FLAG_P(part, PM_NODE_FLAG_NEWLINE)) continue;
-            pm_string_t *unescaped = &((pm_string_node_t *) part)->unescaped;
-            const char *bytes = (const char *) pm_string_source(unescaped);
-            size_t length = pm_string_length(unescaped);
-            int strip = dedent_string_column(bytes, (long) length, indent);
-            if (strip > 0) pm_string_constant_init(unescaped, bytes + strip, length - (size_t) strip);
+        pm_node_list_t *parts = &((pm_interpolated_string_node_t *) root)->parts;
+        size_t kept = 0;
+        for (size_t i = 0; i < parts->size; i++) {
+            pm_node_t *part = parts->nodes[i];
+            if (PM_NODE_TYPE_P(part, PM_STRING_NODE) && PM_NODE_FLAG_P(part, PM_NODE_FLAG_NEWLINE)) {
+                pm_string_t *unescaped = &((pm_string_node_t *) part)->unescaped;
+                const char *bytes = (const char *) pm_string_source(unescaped);
+                size_t length = pm_string_length(unescaped);
+                int strip = dedent_string_column(bytes, (long) length, indent);
+                if (strip > 0) pm_string_constant_init(unescaped, bytes + strip, length - (size_t) strip);
+                /* a line-leading whitespace run the dedent consumed entirely
+                 * leaves no part behind when an interpolation follows (the
+                 * hand parser never creates one there) */
+                if (pm_string_length(unescaped) == 0 && i + 1 < parts->size &&
+                    (PM_NODE_TYPE_P(parts->nodes[i + 1], PM_EMBEDDED_STATEMENTS_NODE) ||
+                     PM_NODE_TYPE_P(parts->nodes[i + 1], PM_EMBEDDED_VARIABLE_NODE))) {
+                    continue;
+                }
+            }
+            parts->nodes[kept++] = part;
         }
+        parts->size = kept;
         return root;
     }
 
@@ -8145,7 +8184,18 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
                 return tSTRING_CONTENT;
             }
             tokadd(p, nextc(p));
-            if (p->heredoc_indent > 0) {
+            /* heredoc_indent alone is not reliable here: it is parked at 0
+             * while the token after an interpolation's closing brace is
+             * fetched, and that token may be this very line */
+            if (p->heredoc_indent > 0 || here->ysquiggly) {
+                /* the newline ends the line for the indent tracker too; once
+                 * the minimum indent reaches 0 the tracker stops running, so
+                 * its own reset would never fire and the terminator check
+                 * would take the next line for content. With the tracker
+                 * still live (indent > 0) upstream's bookkeeping applies. */
+                if (p->heredoc_indent <= 0 && p->heredoc_line_indent == -1) {
+                    p->heredoc_line_indent = 0;
+                }
                 lex_goto_eol(p);
                 goto flush;
             }
@@ -8157,7 +8207,13 @@ here_document(struct parser_params *p, rb_strterm_heredoc_t *here)
     dispatch_heredoc_end(p);
     heredoc_restore(p, &p->lex.strterm->u.heredoc);
     token_flush(p);
-    p->lex.strterm = NEW_STRTERM(func | STR_FUNC_TERM, 0, 0);
+    {
+        /* this strterm continues the heredoc it does not open a literal, so
+         * the escape-forced encoding of the content flushed below survives */
+        rb_encoding *explicit_save = p->yexplicit_enc;
+        p->lex.strterm = NEW_STRTERM(func | STR_FUNC_TERM, 0, 0);
+        p->yexplicit_enc = explicit_save;
+    }
     p->lex.strterm->u.literal.yopener_beg = p->yheredoc_opener.beg;
     p->lex.strterm->u.literal.yopener_end = p->yheredoc_opener.end;
     p->yheredoc_opener.beg = p->yheredoc_opener.end = 0;
@@ -8915,6 +8971,7 @@ parse_qmark(struct parser_params *p, int space_seen)
     rb_parser_string_t *lit;
     const char *start = p->lex.pcur;
 
+    p->yexplicit_enc = NULL;
     if (IS_END()) {
         SET_LEX_STATE(EXPR_VALUE);
         return '?';
@@ -8958,6 +9015,9 @@ parse_qmark(struct parser_params *p, int space_seen)
         if (peek(p, 'u')) {
             nextc(p);
             enc = rb_utf8_encoding();
+            /* a \u in a character literal forces UTF-8 no matter the
+             * codepoint (the hand parser's PM_ESCAPE_FLAG_SINGLE rule) */
+            p->yexplicit_enc = enc;
             tokadd_utf8(p, &enc, -1, 0, 0);
         }
         else if (!ISASCII(c = peekc(p)) && c != -1) {
@@ -8966,6 +9026,7 @@ parse_qmark(struct parser_params *p, int space_seen)
         }
         else {
             c = read_escape(p, 0, p->lex.pcur - rb_strlen_lit("?\\"));
+            if (c >= 0x80) p->yexplicit_enc = p->enc;
             tokadd(p, c);
         }
     }
@@ -10832,15 +10893,16 @@ pm_ytarget(struct parser_params *p, NODE *node)
       case PM_CALL_NODE: {
         pm_call_node_t *call = (pm_call_node_t *) node;
         if (!PM_NODE_FLAG_P(node, PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE)) break;
+        pm_node_flags_t kept = call->base.flags & (pm_node_flags_t) (PM_CALL_NODE_FLAGS_IGNORE_VISIBILITY | PM_CALL_NODE_FLAGS_SAFE_NAVIGATION);
         if (call->opening_loc.length > 0) {
             /* an index write: a[i] */
             return (NODE *) pm_index_target_node_new(
-                p->pm->arena, ++p->pm->node_id, PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE, loc,
+                p->pm->arena, ++p->pm->node_id, PM_CALL_NODE_FLAGS_ATTRIBUTE_WRITE | kept, loc,
                 call->receiver, call->opening_loc, call->arguments, call->closing_loc,
                 (pm_block_argument_node_t *) call->block);
         }
         return (NODE *) pm_call_target_node_new(
-            p->pm->arena, ++p->pm->node_id, 0, loc,
+            p->pm->arena, ++p->pm->node_id, kept, loc,
             call->receiver, call->call_operator_loc, call->name, call->message_loc);
       }
       case PM_MULTI_TARGET_NODE:
@@ -12752,7 +12814,7 @@ rb_node_imaginary_new(struct parser_params *p, char* val, int base, int seen_poi
  * the encoding onto a literal: valid UTF-8 forces UTF-8, anything else
  * forces binary. Only a UTF-8 source forces at all. */
 static pm_node_flags_t
-pm_ystr_forced_flags(struct parser_params *p, const pm_string_t *unescaped, pm_location_t content_loc)
+pm_ystr_forced_flags_unused(struct parser_params *p, const pm_string_t *unescaped, pm_location_t content_loc)
 {
     if (pm_ystr_ascii_only(unescaped)) return 0;
 
@@ -12771,6 +12833,22 @@ pm_ystr_forced_flags(struct parser_params *p, const pm_string_t *unescaped, pm_l
     return PM_STRING_FLAGS_FORCED_UTF8_ENCODING;
 }
 
+/* The mirror of the hand parser's parse_unescaped_encoding: how the string
+ * being lexed must be re-encoded, given the escapes seen so far. */
+static pm_node_flags_t
+pm_yexplicit_flags(struct parser_params *p)
+{
+    if (p->yexplicit_enc != NULL) {
+        if (p->yexplicit_enc == rb_utf8_encoding()) {
+            return PM_STRING_FLAGS_FORCED_UTF8_ENCODING;
+        }
+        if (rb_is_usascii_enc((void *) p->enc)) {
+            return PM_STRING_FLAGS_FORCED_BINARY_ENCODING;
+        }
+    }
+    return 0;
+}
+
 static rb_node_str_t *
 rb_node_str_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc)
 {
@@ -12778,7 +12856,7 @@ rb_node_str_new(struct parser_params *p, rb_parser_string_t *string, const YYLTY
     pm_string_t unescaped = pm_ystr_take(p, string);
 
     return (rb_node_str_t *) pm_string_node_new(
-        p->pm->arena, ++p->pm->node_id, pm_ystr_forced_flags(p, &unescaped, content_loc), content_loc,
+        p->pm->arena, ++p->pm->node_id, pm_yexplicit_flags(p), content_loc,
         (pm_location_t) { 0 }, content_loc, (pm_location_t) { 0 },
         unescaped);
 }
@@ -13471,8 +13549,7 @@ literal_concat(struct parser_params *p, NODE *head, NODE *tail, const YYLTYPE *l
         uint32_t end = tail_string->content_loc.start + tail_string->content_loc.length;
         head_string->content_loc.length = end - head_string->content_loc.start;
         head->location = head_string->content_loc;
-        head->flags &= (pm_node_flags_t) ~(PM_STRING_FLAGS_FORCED_UTF8_ENCODING | PM_STRING_FLAGS_FORCED_BINARY_ENCODING);
-        head->flags |= pm_ystr_forced_flags(p, &head_string->unescaped, head_string->content_loc);
+        head->flags |= (pm_node_flags_t) (tail->flags & (PM_STRING_FLAGS_FORCED_UTF8_ENCODING | PM_STRING_FLAGS_FORCED_BINARY_ENCODING));
         return head;
     }
 
@@ -13987,12 +14064,15 @@ new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc,
         pm_string_t unescaped = PM_STRING_EMPTY;
         if (node != NULL) unescaped = ((pm_string_node_t *) node)->unescaped;
         flags |= PM_NODE_FLAG_STATIC_LITERAL;
-        if (!explicit_encoding && pm_ystr_ascii_only(&unescaped)) {
-            flags |= PM_REGULAR_EXPRESSION_FLAGS_FORCED_US_ASCII_ENCODING;
-        }
-        return (NODE *) pm_regular_expression_node_new(
+        (void) explicit_encoding;
+        pm_regular_expression_node_t *regexp = pm_regular_expression_node_new(
             p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
             opening, content, closing, unescaped);
+        /* prism's regexp analyzer owns the encoding decision (and its
+         * errors); it re-reads the verbatim escapes from the unescaped
+         * field, which the fork keeps the same way the hand parser does */
+        regexp->base.flags |= pm_regexp_parse(p->pm, regexp, NULL, NULL);
+        return (NODE *) regexp;
     }
 
     if (PM_NODE_TYPE_P(node, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(node, PM_EMBEDDED_VARIABLE_NODE)) {
@@ -15368,8 +15448,19 @@ dsym_node(struct parser_params *p, NODE *node, const YYLTYPE *loc)
         pm_string_t unescaped = PM_STRING_EMPTY;
         if (node != NULL) unescaped = ((pm_string_node_t *) node)->unescaped;
         pm_node_flags_t flags = PM_NODE_FLAG_STATIC_LITERAL;
-        /* an empty interpolatable symbol keeps the source encoding */
-        if (pm_ystr_ascii_only(&unescaped) && (single_quoted || pm_string_length(&unescaped) > 0)) {
+        /* the escape-forced encoding wins (the hand parser's
+         * parse_symbol_encoding); otherwise an ascii-only symbol reads
+         * US-ASCII, except an empty interpolatable one, which keeps the
+         * source encoding */
+        if (p->yexplicit_enc != NULL) {
+            if (p->yexplicit_enc == rb_utf8_encoding()) {
+                flags |= PM_SYMBOL_FLAGS_FORCED_UTF8_ENCODING;
+            }
+            else if (rb_is_usascii_enc((void *) p->enc)) {
+                flags |= PM_SYMBOL_FLAGS_FORCED_BINARY_ENCODING;
+            }
+        }
+        else if (pm_ystr_ascii_only(&unescaped) && (single_quoted || pm_string_length(&unescaped) > 0)) {
             flags |= PM_SYMBOL_FLAGS_FORCED_US_ASCII_ENCODING;
         }
         return (NODE *) pm_symbol_node_new(
