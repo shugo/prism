@@ -1040,6 +1040,12 @@ struct parser_params {
     const char *ydummy_end_kind;
     int ydummy_end_lineno;
 
+    /* fork: the last generic syntax-error diagnostic and the name of the
+     * unexpected token it reported, so a context-aware error production can
+     * rewrite it into the hand parser's wording. */
+    pm_diagnostic_t *ylast_syntax_diag;
+    char ylast_unexpected[64];
+
     /* fork: the start offset of the variable name assignable() is declaring;
      * local_var records it in the used table (where CRuby stores the source
      * line) so unused-variable warnings carry the name's exact location. */
@@ -2007,6 +2013,7 @@ static void local_var(struct parser_params*, ID);
 static void arg_var(struct parser_params*, ID);
 static int  local_id(struct parser_params *p, ID id);
 static int  local_id_ref(struct parser_params*, ID, ID **);
+static void pm_yerror_replace_last(struct parser_params *p, pm_diagnostic_id_t diag_id);
 #define internal_id rb_parser_internal_id
 static ID internal_id(struct parser_params*);
 static NODE *new_args_forward_call(struct parser_params*, NODE*, const YYLTYPE*, const YYLTYPE*);
@@ -2511,10 +2518,10 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
 %token <id>   tCONSTANT      "constant"
 %token <id>   tCVAR          "class variable"
 %token <id>   tLABEL         "label"
-%token <node> tINTEGER       "integer literal"
-%token <node> tFLOAT         "float literal"
-%token <node> tRATIONAL      "rational literal"
-%token <node> tIMAGINARY     "imaginary literal"
+%token <node> tINTEGER       "integer"
+%token <node> tFLOAT         "float"
+%token <node> tRATIONAL      "rational"
+%token <node> tIMAGINARY     "imaginary"
 %token <node> tCHAR          "char literal"
 %token <node> tNTH_REF       "numbered reference"
 %token <node> tBACK_REF      "back reference"
@@ -2616,10 +2623,10 @@ rb_parser_enc_str_buf_cat(struct parser_params *p, rb_parser_string_t *str, cons
 %token tSTAR		"*"
 %token tDSTAR		"**arg"
 %token tAMPER		"&"
-%token <num> tLAMBDA	"->"
+%token <num> tLAMBDA	"'->'"
 %token tSYMBEG		"symbol literal"
 %token tSTRING_BEG	"string literal"
-%token tXSTRING_BEG	"backtick literal"
+%token tXSTRING_BEG	"'`'"
 %token tREGEXP_BEG	"regexp literal"
 %token tWORDS_BEG	"word list"
 %token tQWORDS_BEG	"verbatim word list"
@@ -3803,6 +3810,7 @@ paren_args	: '(' opt_call_args rparen
                     {
                         /* fork: unclosed argument list; recover with the
                          * arguments seen so far */
+                        pm_yerror_replace_last(p, PM_ERR_ARGUMENT_TERM_PAREN);
                         $$ = $2;
                     }
                 | '(' args ',' args_forward rparen
@@ -4432,7 +4440,7 @@ k_end		: keyword_end
                                           p->ydummy_end_kind, p->ydummy_end_lineno);
                         }
                         else {
-                            compile_error(p, "syntax error, unexpected end-of-input");
+                            compile_error(p, "unexpected end-of-input");
                         }
                     }
                 ;
@@ -5691,6 +5699,7 @@ f_paren_args	: '(' f_args rparen
                     {
                         /* fork: unclosed parameter list; recover with the
                          * parameters seen so far */
+                        pm_yerror_replace_last(p, PM_ERR_DEF_PARAMS_TERM_PAREN);
                         $$ = $2;
                         SET_LEX_STATE(EXPR_BEG);
                         p->command_start = TRUE;
@@ -16037,7 +16046,7 @@ count_char(const char *str, int c)
  *  "\"`class' keyword\"" => "`class' keyword"
  */
 size_t
-rb_yytnamerr(struct parser_params *p, char *yyres, const char *yystr)
+rb_yytnamerr0(struct parser_params *p, char *yyres, const char *yystr)
 {
     (void) p;
     if (*yystr == '"') {
@@ -16098,6 +16107,49 @@ rb_yytnamerr(struct parser_params *p, char *yyres, const char *yystr)
 
     strcpy(yyres, yystr);
     return strlen(yyres);
+}
+
+/* On top of upstream's unquoting, spell token names the way the hand parser
+ * does: operator tokens read quoted ('=>', '&.'), and the do-variant display
+ * names ('do' for block, ...) reduce to the bare keyword. */
+static size_t
+rb_yytnamerr(struct parser_params *p, char *yyres, const char *yystr)
+{
+    char scratch[128];
+    if (strlen(yystr) >= 100) {
+        return rb_yytnamerr0(p, yyres, yystr);
+    }
+
+    size_t length = rb_yytnamerr0(p, scratch, yystr);
+
+    if (scratch[0] == '\'') {
+        /* "'do' for block" -> "'do'" */
+        char *closing = strchr(scratch + 1, '\'');
+        if (closing != NULL && closing[1] != '\0') {
+            closing[1] = '\0';
+            length = (size_t) (closing + 1 - scratch);
+        }
+    }
+    else {
+        bool bare_operator = length > 0;
+        for (size_t i = 0; i < length; i++) {
+            unsigned char c = (unsigned char) scratch[i];
+            if (ISALNUM(c) || c == ' ' || c == '\\' || c == '$' || c == '@') {
+                bare_operator = false;
+                break;
+            }
+        }
+        if (bare_operator && length + 2 < sizeof(scratch)) {
+            memmove(scratch + 1, scratch, length);
+            scratch[0] = '\'';
+            scratch[length + 1] = '\'';
+            scratch[length + 2] = '\0';
+            length += 2;
+        }
+    }
+
+    if (yyres != NULL) memcpy(yyres, scratch, length + 1);
+    return length;
 }
 
 /*
@@ -16315,10 +16367,30 @@ parser_yyerror(struct parser_params *p, const YYLTYPE *yylloc, const char *msg)
     if (!yylloc) {
         yylloc = RUBY_SET_YYLLOC(current);
     }
+
+    /* the hand parser's messages carry no "syntax error, " prefix (the
+     * caller adds its own framing), so drop yacc's */
+    if (strncmp(msg, "syntax error, ", 14) == 0) msg += 14;
+
+    /* remember what was unexpected: a context-aware error production may
+     * rewrite this diagnostic into its own wording */
+    p->ylast_syntax_diag = NULL;
+    p->ylast_unexpected[0] = '\0';
+    if (strncmp(msg, "unexpected ", 11) == 0) {
+        const char *start = msg + 11;
+        const char *end = strstr(start, ", expecting");
+        size_t length = end != NULL ? (size_t) (end - start) : strlen(start);
+        if (length > 0 && length < sizeof(p->ylast_unexpected)) {
+            memcpy(p->ylast_unexpected, start, length);
+            p->ylast_unexpected[length] = '\0';
+        }
+    }
+
     pm_diagnostic_list_append_format(
         &p->pm->metadata_arena, &p->pm->error_list,
         yylloc->beg, yylloc->end - yylloc->beg,
         PM_ERR_PARSEY_SYNTAX, msg);
+    p->ylast_syntax_diag = (pm_diagnostic_t *) p->pm->error_list.tail;
     p->error_p = 1;
 
     /* drop pending fragments: after recovery they would attach to whatever
@@ -16332,6 +16404,37 @@ parser_yyerror(struct parser_params *p, const YYLTYPE *yylloc, const char *msg)
     p->ykwrest_param = NULL;
     p->yblock_param = NULL;
     return 0;
+}
+
+/* Replace the syntax error the offending token just produced with the hand
+ * parser's context wording ("unexpected X; expected a `)` to close ..."),
+ * from an error production that knows what construct it recovered. */
+static void
+pm_yerror_replace_last(struct parser_params *p, pm_diagnostic_id_t diag_id)
+{
+    pm_diagnostic_t *diag = p->ylast_syntax_diag;
+    pm_list_t *list = &p->pm->error_list;
+    if (diag == NULL || p->ylast_unexpected[0] == '\0') return;
+    if (list->tail != (pm_list_node_t *) diag) return;
+
+    /* unlink the tail, then append the rewritten diagnostic in its place */
+    if (list->head == (pm_list_node_t *) diag) {
+        list->head = NULL;
+        list->tail = NULL;
+    }
+    else {
+        pm_list_node_t *prev = list->head;
+        while (prev->next != (pm_list_node_t *) diag) prev = prev->next;
+        prev->next = NULL;
+        list->tail = prev;
+    }
+    list->size--;
+
+    pm_diagnostic_list_append_format(
+        &p->pm->metadata_arena, list,
+        diag->location.start, diag->location.length,
+        diag_id, p->ylast_unexpected);
+    p->ylast_syntax_diag = NULL;
 }
 
 static int

@@ -110,10 +110,10 @@ extern int yydebug;
     tCONSTANT = 311,               /* "constant"  */
     tCVAR = 312,                   /* "class variable"  */
     tLABEL = 313,                  /* "label"  */
-    tINTEGER = 314,                /* "integer literal"  */
-    tFLOAT = 315,                  /* "float literal"  */
-    tRATIONAL = 316,               /* "rational literal"  */
-    tIMAGINARY = 317,              /* "imaginary literal"  */
+    tINTEGER = 314,                /* "integer"  */
+    tFLOAT = 315,                  /* "float"  */
+    tRATIONAL = 316,               /* "rational"  */
+    tIMAGINARY = 317,              /* "imaginary"  */
     tCHAR = 318,                   /* "char literal"  */
     tNTH_REF = 319,                /* "numbered reference"  */
     tBACK_REF = 320,               /* "back reference"  */
@@ -155,10 +155,10 @@ extern int yydebug;
     tSTAR = 333,                   /* "*"  */
     tDSTAR = 334,                  /* "**arg"  */
     tAMPER = 335,                  /* "&"  */
-    tLAMBDA = 336,                 /* "->"  */
+    tLAMBDA = 336,                 /* "'->'"  */
     tSYMBEG = 337,                 /* "symbol literal"  */
     tSTRING_BEG = 338,             /* "string literal"  */
-    tXSTRING_BEG = 339,            /* "backtick literal"  */
+    tXSTRING_BEG = 339,            /* "'`'"  */
     tREGEXP_BEG = 340,             /* "regexp literal"  */
     tWORDS_BEG = 341,              /* "word list"  */
     tQWORDS_BEG = 342,             /* "verbatim word list"  */
@@ -190,7 +190,7 @@ extern int yydebug;
 #if ! defined YYSTYPE && ! defined YYSTYPE_IS_DECLARED
 union YYSTYPE
 {
-#line 2434 "parse.y"
+#line 2441 "parse.y"
 
     NODE *node;
     rb_node_fcall_t *node_fcall;
