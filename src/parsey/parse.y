@@ -1083,6 +1083,15 @@ struct parser_params {
     ID ycur_arg;
     unsigned int ycur_arg_used:1;
 
+    /* fork: line-struct recycling. At most two line structs are live at once
+     * (lastline/nextline, plus the one-token rewind of a fresh line), so
+     * displaced lines sit out two generations in the graveyard ring and then
+     * join the free pool, unless a heredoc pinned them. The pool links spare
+     * structs through their ptr field. */
+    rb_parser_string_t *yline_pool;
+    rb_parser_string_t *yline_grave[2];
+    int yline_grave_idx;
+
     /* fork: the start offset of the variable name assignable() is declaring;
      * local_var records it in the used table (where CRuby stores the source
      * line) so unused-variable warnings carry the name's exact location. */
@@ -6643,7 +6652,19 @@ lex_getline(struct parser_params *p)
      * while heredocs rewind the current line. */
     if (nl != NULL) pm_line_offset_list_append(&p->pm->metadata_arena, &p->pm->line_offsets, YOFF(stop));
 
-    rb_parser_string_t *line = pm_ystring_new_shared(&p->pm->metadata_arena, start, (long) (stop - start), p->enc);
+    rb_parser_string_t *line = p->yline_pool;
+    if (line != NULL) {
+        p->yline_pool = (rb_parser_string_t *) (uintptr_t) line->ptr;
+        line->ptr = (char *) (uintptr_t) start;
+        line->len = (long) (stop - start);
+        line->enc = p->enc;
+        line->coderange = PM_YSTRING_CODERANGE_UNKNOWN;
+        line->shared = true;
+        line->pinned = false;
+    }
+    else {
+        line = pm_ystring_new_shared(&p->pm->metadata_arena, start, (long) (stop - start), p->enc);
+    }
     p->line_count++;
     return line;
 }
@@ -6766,11 +6787,27 @@ nextline(struct parser_params *p, int set_encoding)
     p->ruby_sourceline++;
     {
         uint32_t prev_end = p->lex.pend != NULL ? YOFF(p->lex.pend) : 0;
+        rb_parser_string_t *displaced = p->lex.lastline;
         set_lastline(p, str);
         if (prev_end != 0 && YOFF(p->lex.pbeg) != prev_end) {
             /* a heredoc consumed the lines in between */
             p->ydiscontinuous = 1;
             p->ydiscont_seam = prev_end;
+        }
+        /* The displaced line may still be a yylex frame's rewind target for
+         * one more token, so it waits two generations before recycling. A
+         * rewound line can be displaced twice; the grave must hold one entry
+         * per struct, not per displacement. */
+        if (displaced != NULL && displaced != str &&
+            displaced != p->yline_grave[0] && displaced != p->yline_grave[1]) {
+            rb_parser_string_t *dead = p->yline_grave[p->yline_grave_idx];
+            p->yline_grave[p->yline_grave_idx] = displaced;
+            p->yline_grave_idx ^= 1;
+            if (dead != NULL && !dead->pinned &&
+                dead != p->lex.lastline && dead != p->lex.nextline) {
+                dead->ptr = (char *) (uintptr_t) p->yline_pool;
+                p->yline_pool = dead;
+            }
         }
     }
     token_flush(p);
@@ -7959,6 +7996,7 @@ heredoc_identifier(struct parser_params *p)
     here->func = func;
     here->ysquiggly = indent > 0;
     here->lastline = p->lex.lastline;
+    here->lastline->pinned = true;
 
     token_flush(p);
     p->heredoc_indent = indent;

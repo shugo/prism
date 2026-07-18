@@ -68,6 +68,10 @@ typedef struct pm_ystring {
     /* Whether ptr is a slice of the source rather than this string's own
      * memory: do not free it, do not write through it. */
     bool shared;
+
+    /* Whether something long-lived (a heredoc's saved opening line) points at
+     * this struct: the line recycler must not reuse it. */
+    bool pinned;
 } pm_ystring_t;
 
 /* The accessors the ported code uses, under CRuby's names. */

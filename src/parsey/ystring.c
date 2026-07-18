@@ -30,6 +30,7 @@ pm_ystring_new(const char *ptr, long len, const pm_encoding_t *enc) {
     str->enc = enc;
     str->coderange = PM_YSTRING_CODERANGE_UNKNOWN;
     str->shared = false;
+    str->pinned = false;
     PM_YSTRING_TERM_FILL(str);
 
     return str;
@@ -48,6 +49,7 @@ pm_ystring_new_shared(pm_arena_t *arena, const char *ptr, long len, const pm_enc
     str->enc = enc;
     str->coderange = PM_YSTRING_CODERANGE_UNKNOWN;
     str->shared = true;
+    str->pinned = false;
 
     return str;
 }
