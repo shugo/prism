@@ -2,11 +2,5 @@
 # This list is a ratchet: when an entry starts passing, the equivalence test
 # fails until it is removed here.
 #
-# The remaining entries are two deep lexer-strategy differences: heredocs
-# opened inside another literal's interpolation, whose bodies interleave
-# with that literal's continuation lines (the hand parser skips ahead
-# instead of reading line by line), and one begin-keyword-versus-label
-# lexing corner.
-begin_ensure.txt
-regex.txt
-spanning_heredoc_newlines.txt
+# Currently empty: all fixtures parse tree-identically to the hand-written
+# parser, warnings included.

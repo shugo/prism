@@ -1627,6 +1627,7 @@ static pm_constant_id_t pm_yid2const(struct parser_params *p, ID id);
 static void pm_ymarker_param(struct parser_params *p, NODE **slot, int kind, ID name, const YYLTYPE *mark_loc, const YYLTYPE *name_loc);
 static NODE *pm_ykw_param(struct parser_params *p, ID label, NODE *value, const YYLTYPE *label_loc, const YYLTYPE *loc);
 static void pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword);
+static bool pm_ybodystmt_wrapper_p(NODE *node);
 static rb_node_dstr_t *rb_node_dstr_new0(struct parser_params *p, rb_parser_string_t *string, long nd_alen, NODE *nd_next, const YYLTYPE *loc);
 static rb_node_dstr_t *rb_node_dstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
 static rb_node_xstr_t *rb_node_xstr_new(struct parser_params *p, rb_parser_string_t *string, const YYLTYPE *loc);
@@ -1861,7 +1862,7 @@ set_embraced_location(NODE *node, const rb_code_location_t *beg, const rb_code_l
         block->opening_loc = pm_yloc(beg);
         block->closing_loc = pm_yloc(end);
         block->base.location = (pm_location_t) { beg->beg, end->end - beg->beg };
-        if (block->body != NULL && PM_NODE_TYPE_P(block->body, PM_BEGIN_NODE)) {
+        if (pm_ybodystmt_wrapper_p(block->body)) {
             pm_ybegin_stamp_end(block->body, block->closing_loc);
             block->body->location = block->base.location;
         }
@@ -10516,7 +10517,7 @@ string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *openin
     if (node == NULL) {
         /* Empty contents: the node carries a zero-width content location
          * between the quotes, as the hand-written parser produces. */
-        pm_location_t content_loc = pm_ycontent_between(opening->end, closing->beg);
+        pm_location_t content_loc = { closing->beg, 0 };
         node = (NODE *) pm_string_node_new(
             p->pm->arena, ++p->pm->node_id, 0, content_loc,
             (pm_location_t) { 0 }, content_loc, (pm_location_t) { 0 },
@@ -10528,9 +10529,10 @@ string_literal_quotes(struct parser_params *p, NODE *node, const YYLTYPE *openin
         string->opening_loc = pm_yloc(opening);
         string->closing_loc = pm_yloc(closing);
         /* The lexer hands content over a line at a time, so the node's own
-         * content location can cover just the last chunk; the full span is
-         * everything between the quotes. */
-        string->content_loc = pm_ycontent_between(opening->end, closing->beg);
+         * content location can cover just the last chunk; the full span runs
+         * from the first chunk (which a heredoc body may have pushed past the
+         * opening quote) to the closing quote. */
+        string->content_loc = pm_ycontent_between(string->base.location.start, closing->beg);
         string->base.location = pm_yloc(loc);
         if (p->frozen_string_literal == 1) {
             node->flags |= PM_STRING_FLAGS_FROZEN | PM_NODE_FLAG_STATIC_LITERAL;
@@ -11103,6 +11105,17 @@ pm_yrescue_finish(struct parser_params *p, NODE *node, const YYLTYPE *keyword_lo
 
 /* Stamp the closing `end` through a begin block: the block itself, and the
  * else/ensure clauses whose spans wait for it. */
+static bool
+pm_ybodystmt_wrapper_p(NODE *node)
+{
+    /* A bodystmt that grew rescue/else/ensure clauses becomes a BeginNode
+     * whose end keyword is stamped later by the enclosing reduction. A
+     * complete explicit begin/end block (which can reach the same consumers
+     * as a sole body statement) already carries its end keyword. */
+    if (node == NULL || !PM_NODE_TYPE_P(node, PM_BEGIN_NODE)) return false;
+    return ((pm_begin_node_t *) node)->end_keyword_loc.length == 0;
+}
+
 static void
 pm_ybegin_stamp_end(NODE *node, pm_location_t end_keyword)
 {
@@ -11215,7 +11228,7 @@ pm_yistr(struct parser_params *p, NODE *part)
 static pm_node_t *
 pm_yclass_body(struct parser_params *p, NODE *body, const YYLTYPE *loc, const YYLTYPE *end_keyword_loc)
 {
-    if (body != NULL && PM_NODE_TYPE_P(body, PM_BEGIN_NODE)) {
+    if (pm_ybodystmt_wrapper_p(body)) {
         pm_ybegin_stamp_end(body, pm_yloc(end_keyword_loc));
         body->location = pm_yloc(loc);
         return body;
@@ -11767,7 +11780,7 @@ pm_ydef_finish(struct parser_params *p, NODE *node, NODE *args, NODE *body, cons
     pm_def_node_t *def = (pm_def_node_t *) node;
     def->base.location = pm_yloc(loc);
     def->end_keyword_loc = pm_yloc(end_loc);
-    if (body != NULL && PM_NODE_TYPE_P(body, PM_BEGIN_NODE)) {
+    if (pm_ybodystmt_wrapper_p(body)) {
         pm_ybegin_stamp_end(body, def->end_keyword_loc);
         body->location = def->base.location;
         def->body = body;
@@ -12113,8 +12126,9 @@ static rb_node_begin_t *
 rb_node_begin_new(struct parser_params *p, NODE *nd_body, const YYLTYPE *loc)
 {
     /* A bodystmt with rescue/else/ensure already built the BeginNode; the
-     * keywords are stamped by the enclosing begin/end reduction. */
-    if (nd_body != NULL && PM_NODE_TYPE_P(nd_body, PM_BEGIN_NODE)) {
+     * keywords are stamped by the enclosing begin/end reduction. A complete
+     * begin/end block as the sole body statement gets its own wrapper. */
+    if (pm_ybodystmt_wrapper_p(nd_body)) {
         nd_body->location = pm_yloc(loc);
         return (rb_node_begin_t *) nd_body;
     }
@@ -12297,7 +12311,7 @@ static rb_node_iter_t *
 rb_node_iter_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_body, const YYLTYPE *loc)
 {
     pm_node_t *body;
-    if (nd_body != NULL && PM_NODE_TYPE_P(nd_body, PM_BEGIN_NODE)) {
+    if (pm_ybodystmt_wrapper_p(nd_body)) {
         /* A body that grew rescue/ensure clauses hangs directly off the
          * block, sharing its span once the braces are known. */
         body = nd_body;
@@ -12322,7 +12336,7 @@ static rb_node_lambda_t *
 rb_node_lambda_new(struct parser_params *p, rb_node_args_t *nd_args, NODE *nd_body, const YYLTYPE *loc, const YYLTYPE *operator_loc, const YYLTYPE *opening_loc, const YYLTYPE *closing_loc)
 {
     pm_node_t *body;
-    if (nd_body != NULL && PM_NODE_TYPE_P(nd_body, PM_BEGIN_NODE)) {
+    if (pm_ybodystmt_wrapper_p(nd_body)) {
         /* rescue/ensure clauses hang directly off the lambda, spanning the
          * whole braced body with the end keyword stamped, as in blocks */
         body = nd_body;
@@ -13971,14 +13985,6 @@ pm_ymatch_capture(pm_parser_t *parser, const pm_string_t *capture, bool shared, 
         if (width == 1 && !(enc->alnum_char(source + i, 1) || source[i] == '_')) return;
         i += width;
     }
-    /* the gperf table compares with strcmp, so it needs a terminated copy */
-    if (length <= 12) {
-        char keyword[13];
-        memcpy(keyword, source, length);
-        keyword[length] = '\0';
-        if (reserved_word(keyword, (unsigned int) length) != NULL) return;
-    }
-
     /* the name's own span, when the unescaped content mirrors the source */
     pm_location_t target_loc = data->receiver_loc;
     if (data->content_length == data->content_loc.length) {
@@ -13986,6 +13992,16 @@ pm_ymatch_capture(pm_parser_t *parser, const pm_string_t *capture, bool shared, 
     }
 
     ID id = pm_yid_intern(&p->pm->metadata_arena, &p->pm->constant_pool, source, length, p->enc);
+
+    /* a keyword-shaped name only binds when it is already a local (a
+     * parameter named nil: makes (?<nil>) capture into it)
+     * (the gperf table compares with strcmp, so it needs a terminated copy) */
+    if (length <= 12 && !lvar_defined(p, id)) {
+        char keyword[13];
+        memcpy(keyword, source, length);
+        keyword[length] = '\0';
+        if (reserved_word(keyword, (unsigned int) length) != NULL) return;
+    }
     pm_constant_id_t name = pm_yid2const(p, id);
     if (name == PM_CONSTANT_ID_UNSET || pm_constant_id_list_includes(&data->base.names, name)) return;
     pm_constant_id_list_append(p->pm->arena, &data->base.names, name);
@@ -14324,6 +14340,11 @@ new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc,
     if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
         pm_string_t unescaped = PM_STRING_EMPTY;
         if (node != NULL) unescaped = ((pm_string_node_t *) node)->unescaped;
+        /* empty patterns keep the opening delimiter as their (zero-width)
+         * anchor, matching the hand parser */
+        content = node != NULL
+            ? pm_ycontent_between(node->location.start, closing.start)
+            : (pm_location_t) { opening.start + opening.length, 0 };
         flags |= PM_NODE_FLAG_STATIC_LITERAL;
         (void) explicit_encoding;
         /* the regexp analyzer can peek one byte past the pattern, so it
@@ -14348,6 +14369,47 @@ new_regexp(struct parser_params *p, NODE *node, int options, const YYLTYPE *loc,
     if (PM_NODE_TYPE_P(node, PM_EMBEDDED_STATEMENTS_NODE) || PM_NODE_TYPE_P(node, PM_EMBEDDED_VARIABLE_NODE)) {
         node = pm_yistr(p, node);
     }
+    if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) {
+        pm_node_list_t parts = ((pm_interpolated_string_node_t *) node)->parts;
+
+        /* A '#' that turns out not to start an interpolation still splits the
+         * token (`/a#@~b/`), leaving adjacent plain chunks the hand parser
+         * lexes as one. Fuse them back into a single static regexp. Chunks
+         * separated by a heredoc body are not source-adjacent and stay apart. */
+        bool fusable = parts.size > 0;
+        size_t total_length = 0;
+        for (size_t i = 0; i < parts.size && fusable; i++) {
+            pm_node_t *part = parts.nodes[i];
+            if (!PM_NODE_TYPE_P(part, PM_STRING_NODE)) { fusable = false; break; }
+            if (i > 0 && part->location.start != parts.nodes[i - 1]->location.start + parts.nodes[i - 1]->location.length) { fusable = false; break; }
+            total_length += pm_string_length(&((pm_string_node_t *) part)->unescaped);
+        }
+        if (fusable) {
+            uint8_t *fused = (uint8_t *) pm_arena_alloc(p->pm->arena, total_length + 1, 1);
+            size_t offset = 0;
+            for (size_t i = 0; i < parts.size; i++) {
+                const pm_string_t *unescaped = &((pm_string_node_t *) parts.nodes[i])->unescaped;
+                memcpy(fused + offset, pm_string_source(unescaped), pm_string_length(unescaped));
+                offset += pm_string_length(unescaped);
+            }
+            fused[total_length] = '\0';
+            pm_string_node_t *fused_node = (pm_string_node_t *) parts.nodes[0];
+            pm_string_constant_init(&fused_node->unescaped, (const char *) fused, total_length);
+            node = (NODE *) fused_node;
+        }
+    }
+
+    if (PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
+        pm_string_t unescaped = ((pm_string_node_t *) node)->unescaped;
+        flags |= PM_NODE_FLAG_STATIC_LITERAL;
+
+        pm_regular_expression_node_t *regexp = pm_regular_expression_node_new(
+            p->pm->arena, ++p->pm->node_id, flags, pm_yloc(loc),
+            opening, content, closing, unescaped);
+        regexp->base.flags |= pm_regexp_parse(p->pm, regexp, NULL, NULL);
+        return (NODE *) regexp;
+    }
+
     if (PM_NODE_TYPE_P(node, PM_INTERPOLATED_STRING_NODE)) {
         /* the hand parser's fold: static as long as every interpolation is a
          * single string (or static interpolated string) statement */
@@ -14398,8 +14460,10 @@ new_xstring(struct parser_params *p, NODE *node, const YYLTYPE *opening_loc, con
     pm_location_t node_loc = pm_yloc(loc);
 
     /* a <<`CMD` heredoc: spans from the parked capture, opener as the span */
+    bool from_heredoc = false;
     pm_location_t heredoc_content, heredoc_closing;
     if (pm_yheredoc_take(p, opening_loc, &heredoc_content, &heredoc_closing)) {
+        from_heredoc = true;
         content = heredoc_content;
         closing = heredoc_closing;
         node_loc = opening;
@@ -14417,6 +14481,11 @@ new_xstring(struct parser_params *p, NODE *node, const YYLTYPE *opening_loc, con
     if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
         pm_string_t unescaped = PM_STRING_EMPTY;
         if (node != NULL) unescaped = ((pm_string_node_t *) node)->unescaped;
+        if (!from_heredoc) {
+            content = node != NULL
+                ? pm_ycontent_between(node->location.start, closing.start)
+                : (pm_location_t) { opening.start + opening.length, 0 };
+        }
         return (NODE *) pm_x_string_node_new(
             p->pm->arena, ++p->pm->node_id, 0, node_loc,
             opening, content, closing, unescaped);
@@ -15738,9 +15807,9 @@ dsym_node(struct parser_params *p, NODE *node, const YYLTYPE *loc)
 
     pm_location_t opening = { location.start, open_width };
     pm_location_t closing = { location.start + location.length - close_width, close_width };
-    pm_location_t value = pm_ycontent_between(opening.start + open_width, closing.start);
 
     if (node == NULL || PM_NODE_TYPE_P(node, PM_STRING_NODE)) {
+        pm_location_t value = pm_ycontent_between(node != NULL ? node->location.start : closing.start, closing.start);
         pm_string_t unescaped = PM_STRING_EMPTY;
         if (node != NULL) unescaped = ((pm_string_node_t *) node)->unescaped;
         pm_node_flags_t flags = PM_NODE_FLAG_STATIC_LITERAL;
@@ -15756,7 +15825,7 @@ dsym_node(struct parser_params *p, NODE *node, const YYLTYPE *loc)
                 flags |= PM_SYMBOL_FLAGS_FORCED_BINARY_ENCODING;
             }
         }
-        else if (pm_ystr_ascii_only(&unescaped) && (single_quoted || pm_string_length(&unescaped) > 0)) {
+        else if (pm_ystr_ascii_only(&unescaped) && (single_quoted || first == '%' || pm_string_length(&unescaped) > 0)) {
             flags |= PM_SYMBOL_FLAGS_FORCED_US_ASCII_ENCODING;
         }
         return (NODE *) pm_symbol_node_new(
