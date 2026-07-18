@@ -6022,7 +6022,7 @@ singleton	: value_expr(singleton_expr)
                           case PM_RATIONAL_NODE:
                           case PM_IMAGINARY_NODE:
                           case PM_ARRAY_NODE:
-                            pm_diagnostic_list_append_format(
+                            pm_diagnostic_list_append(
                                 &p->pm->metadata_arena, &p->pm->error_list,
                                 expr->location.start, expr->location.length,
                                 PM_ERR_SINGLETON_FOR_LITERALS);
@@ -7669,7 +7669,7 @@ parse_string(struct parser_params *p, rb_strterm_literal_t *quote)
              * non-interpolating strings, while interpolating strings point at
              * the end of file. */
 # define unterminated_literal(diag_id, beg, len) \
-            pm_diagnostic_list_append_format(&p->pm->metadata_arena, &p->pm->error_list, (beg), (len), diag_id)
+            pm_diagnostic_list_append(&p->pm->metadata_arena, &p->pm->error_list, (beg), (len), diag_id)
             literal_flush(p, p->lex.pcur);
             uint32_t obeg = quote->ybeg;
             uint32_t olen = quote->yend - quote->ybeg;
@@ -8571,15 +8571,20 @@ parser_prepare(struct parser_params *p)
     p->enc = rb_parser_str_get_encoding(p->lex.lastline);
 }
 
-/* fork: emit a prism warning spanning the current token. */
-#define YWARN_TOKEN(...) \
+/* fork: emit a prism warning spanning the current token. The no-argument
+ * variant must not run the template through printf (a literal % in a
+ * template breaks vsnprintf on some libcs). */
+#define YWARN_TOKEN(diag_id) \
+    pm_diagnostic_list_append(&p->pm->metadata_arena, &p->pm->warning_list, \
+        YOFF(p->lex.ptok), (uint32_t) (p->lex.pcur - p->lex.ptok), diag_id)
+#define YWARN_TOKEN_FORMAT(...) \
     pm_diagnostic_list_append_format(&p->pm->metadata_arena, &p->pm->warning_list, \
         YOFF(p->lex.ptok), (uint32_t) (p->lex.pcur - p->lex.ptok), __VA_ARGS__)
 
 /* upstream splits this into two rb_warning0 lines; the hand parser's single
  * diagnostic carries both halves, so match it. */
 #define ambiguous_operator(tok, op, syn) \
-    YWARN_TOKEN(PM_WARN_AMBIGUOUS_BINARY_OPERATOR, op, syn)
+    YWARN_TOKEN_FORMAT(PM_WARN_AMBIGUOUS_BINARY_OPERATOR, op, syn)
 #define warn_balanced(tok, op, syn) ((void) \
     (!IS_lex_state_for(last_state, EXPR_CLASS|EXPR_DOT|EXPR_FNAME|EXPR_ENDFN) && \
      space_seen && !ISSPACE(c) && \
@@ -8618,7 +8623,7 @@ parse_numeric(struct parser_params *p, int c)
                 do {
                     if (c == '_') {
                         if (nondigit) {
-                            pm_diagnostic_list_append_format(
+                            pm_diagnostic_list_append(
                                 &p->pm->metadata_arena, &p->pm->error_list,
                                 YOFF(p->lex.pcur) - 1, 1,
                                 PM_ERR_INVALID_NUMBER_UNDERSCORE_INNER);
@@ -8648,7 +8653,7 @@ parse_numeric(struct parser_params *p, int c)
                 do {
                     if (c == '_') {
                         if (nondigit) {
-                            pm_diagnostic_list_append_format(
+                            pm_diagnostic_list_append(
                                 &p->pm->metadata_arena, &p->pm->error_list,
                                 YOFF(p->lex.pcur) - 1, 1,
                                 PM_ERR_INVALID_NUMBER_UNDERSCORE_INNER);
@@ -8678,7 +8683,7 @@ parse_numeric(struct parser_params *p, int c)
                 do {
                     if (c == '_') {
                         if (nondigit) {
-                            pm_diagnostic_list_append_format(
+                            pm_diagnostic_list_append(
                                 &p->pm->metadata_arena, &p->pm->error_list,
                                 YOFF(p->lex.pcur) - 1, 1,
                                 PM_ERR_INVALID_NUMBER_UNDERSCORE_INNER);
@@ -8719,7 +8724,7 @@ parse_numeric(struct parser_params *p, int c)
             do {
                 if (c == '_') {
                     if (nondigit) {
-                        pm_diagnostic_list_append_format(
+                        pm_diagnostic_list_append(
                             &p->pm->metadata_arena, &p->pm->error_list,
                             YOFF(p->lex.pcur) - 1, 1,
                             PM_ERR_INVALID_NUMBER_UNDERSCORE_INNER);
@@ -9414,7 +9419,7 @@ warn_cr(struct parser_params *p)
 {
     /* upstream warns once per file (cr_seen); the hand parser warns at every
      * occurrence, at the \r itself, so match it. */
-    pm_diagnostic_list_append_format(
+    pm_diagnostic_list_append(
         &p->pm->metadata_arena, &p->pm->warning_list,
         YOFF(p->lex.pcur) - 1, 1,
         PM_WARN_UNEXPECTED_CARRIAGE_RETURN);
@@ -13194,7 +13199,7 @@ block_append(struct parser_params *p, NODE *head, NODE *tail)
           case PM_REDO_NODE:
           case PM_RETRY_NODE:
           case PM_RETURN_NODE:
-            pm_diagnostic_list_append_format(
+            pm_diagnostic_list_append(
                 &p->pm->metadata_arena, &p->pm->warning_list,
                 tail->location.start, tail->location.length,
                 PM_WARN_UNREACHABLE_STATEMENT);
@@ -14162,13 +14167,13 @@ aryset_check(struct parser_params *p, NODE *args)
     }
 
     if (kwds != NULL) {
-        pm_diagnostic_list_append_format(
+        pm_diagnostic_list_append(
             &p->pm->metadata_arena, &p->pm->error_list,
             kwds->location.start, kwds->location.length,
             PM_ERR_UNEXPECTED_INDEX_KEYWORDS);
     }
     if (block != NULL && PM_NODE_TYPE_P(block, PM_BLOCK_ARGUMENT_NODE)) {
-        pm_diagnostic_list_append_format(
+        pm_diagnostic_list_append(
             &p->pm->metadata_arena, &p->pm->error_list,
             block->location.start, block->location.length,
             PM_ERR_UNEXPECTED_INDEX_BLOCK);
@@ -14186,7 +14191,7 @@ static void
 block_dup_check(struct parser_params *p, NODE *node1, NODE *node2)
 {
     if (node2 && node1 && pm_yargs_block_pass(node1)) {
-        pm_diagnostic_list_append_format(
+        pm_diagnostic_list_append(
             &p->pm->metadata_arena, &p->pm->error_list,
             node2->location.start, node2->location.length,
             PM_ERR_ARGUMENT_BLOCK_MULTI);
@@ -14649,7 +14654,7 @@ value_expr(struct parser_params *p, NODE *node)
 {
     NODE *void_node = value_expr_check(p, node);
     if (void_node) {
-        pm_diagnostic_list_append_format(
+        pm_diagnostic_list_append(
             &p->pm->metadata_arena, &p->pm->error_list,
             void_node->location.start, void_node->location.length,
             PM_ERR_VOID_EXPRESSION);
@@ -14794,7 +14799,7 @@ pm_ycond_regexp(struct parser_params *p, NODE *node, enum cond_type type)
       case PM_INTEGER_NODE:
         if (type == COND_IN_FF) {
             if (!e_option_supplied(p)) {
-                pm_diagnostic_list_append_format(
+                pm_diagnostic_list_append(
                     &p->pm->metadata_arena, &p->pm->warning_list,
                     node->location.start, node->location.length,
                     PM_WARN_INTEGER_IN_FLIP_FLOP);
@@ -14917,7 +14922,7 @@ no_blockarg(struct parser_params *p, NODE *node)
     if (block == NULL) block = p->yblock_pass;
     if (block != NULL && PM_NODE_TYPE_P(block, PM_BLOCK_ARGUMENT_NODE)) {
         p->yblock_pass = NULL;
-        pm_diagnostic_list_append_format(
+        pm_diagnostic_list_append(
             &p->pm->metadata_arena, &p->pm->error_list,
             block->location.start, block->location.length,
             PM_ERR_UNEXPECTED_BLOCK_ARGUMENT);
