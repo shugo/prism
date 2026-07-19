@@ -49,6 +49,9 @@ module Prism
   sig { returns(T::Array[Symbol]) }
   def self.backends; end
 
+  sig { params(backend: ::T.nilable(Symbol)).void }
+  def self.__set_default_backend_native(backend); end
+
   sig { params(source: String, filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseResult) }
   def self.parse(source, filepath: T.unsafe(nil), backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
