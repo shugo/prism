@@ -57,6 +57,19 @@ def make(env, target)
   end
 end
 
+# The gem ships the generated parser, but gem extraction rewrites files in
+# manifest order with fresh timestamps, so the grammar can come out newer
+# than the parser and make would try to regenerate it - and an installed gem
+# has no lrama (or Gemfile) to do that with. The shipped parser is
+# authoritative whenever this is not a development checkout.
+prism_root = File.expand_path("../..", __dir__)
+unless Dir.exist?(File.join(prism_root, ".git"))
+  ["src/parsey/parse.c", "src/parsey/parse.h"].each do |generated|
+    path = File.join(prism_root, generated)
+    File.utime(Time.now, Time.now, path) if File.exist?(path)
+  end
+end
+
 # On non-CRuby we only need the shared library since we'll interface with it
 # through FFI, so we'll build only that and not the C extension. We also avoid
 # `require "mkmf"` as that prepends the GraalVM LLVM toolchain to PATH on TruffleRuby < 24.0,
