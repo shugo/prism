@@ -44,6 +44,11 @@ jobs:
         with:
           path: ruby/prism
           fetch-depth: 1
+      - name: Generate the parse.y backend's parser
+        # The generated parser is not checked in; CRuby vendors lrama for its
+        # own parse.y, so use that copy before the sync picks the file up.
+        working-directory: ruby/prism/src/parsey
+        run: ruby tool/id2token.rb parse.y | ruby -I../../../ruby/tool/lrama/lib ../../../ruby/tool/lrama/exe/lrama -oparse.c -Hparse.h - parse.y
       - run: tool/sync_default_gems.rb prism
         working-directory: ruby/ruby
       - name: Add the parse.y backend to CRuby's prism build

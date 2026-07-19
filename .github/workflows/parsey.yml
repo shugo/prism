@@ -62,20 +62,6 @@ jobs:
       - name: Test suite (parse.y tests skip themselves)
         run: bundle exec rake test
 
-  generate:
-    name: generated parser is current
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: ruby/setup-ruby@v1
-        with:
-          ruby-version: "3.4"
-          bundler-cache: true
-      - name: Regenerate the parser from the grammar
-        run: bundle exec rake parsey:generate
-      - name: Check that the checked-in parser matches
-        run: git diff --exit-code src/parsey/parse.c src/parsey/parse.h
-
   sanitize:
     name: address/UB sanitizers
     runs-on: ubuntu-latest
@@ -86,7 +72,7 @@ jobs:
           ruby-version: "3.4"
           bundler-cache: true
       - name: Generate templated sources
-        run: bundle exec rake templates
+        run: bundle exec rake templates parsey:generate
       - name: Build and run the C tests under the sanitizers
         run: |
           set -eu

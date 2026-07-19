@@ -2,9 +2,12 @@
 
 # The parse.y backend's parser is generated from src/parsey/parse.y by lrama,
 # the parser generator that CRuby itself uses. The generated src/parsey/parse.c
-# is checked in, following the same policy CRuby uses for its releases: building
-# prism from a checkout or an installed gem needs a C compiler but not lrama.
-# Only editing the grammar does.
+# is not checked in: the backend is an opt-in part of the build, and the only
+# consumers of the generated parser are development checkouts (which have lrama
+# through the Gemfile) and gem packaging (`rake build` generates it so that a
+# `gem install prism -- --enable-parsey` does not need lrama). CRuby vendors
+# lrama for its own parse.y, so a future --enable-prism-parsey build generates
+# it the same way.
 
 PARSEY_GRAMMAR = "src/parsey/parse.y"
 PARSEY_SOURCE = "src/parsey/parse.c"
@@ -67,8 +70,14 @@ namespace :parsey do
   end
 end
 
-# The checked-in parser is used as-is: a fresh checkout has arbitrary mtimes,
-# so wiring regeneration into `rake compile` through file tasks fires it (or
-# fails without lrama) essentially at random. Regenerate explicitly with
-# `rake parsey:generate` when editing the grammar; CI keeps the two in sync by
-# regenerating and diffing.
+file PARSEY_SOURCE => [PARSEY_GRAMMAR, PARSEY_IDDEF, PARSEY_ID2TOKEN] do
+  Rake::Task["parsey:generate"].invoke
+end
+
+file PARSEY_HEADER => PARSEY_SOURCE
+
+# The compile task needs the generated parser, except when the build excludes
+# the backend (the same signal ext/prism/extconf.rb reads).
+unless ENV["PRISM_PARSEY"] == "0"
+  task compile: PARSEY_SOURCE if Rake::Task.task_defined?(:compile)
+end

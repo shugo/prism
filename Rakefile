@@ -32,7 +32,9 @@ task compile_no_debug: %i[make_no_debug compile]
 task compile_minimal: %i[make_minimal compile]
 
 # decorate the gem build task with prerequisites
-task build: [:check_manifest, :templates]
+# The gem ships the generated parser so that installing it with the parse.y
+# backend enabled does not need lrama; generate before the manifest check.
+task build: ["src/parsey/parse.c", :check_manifest, :templates]
 
 # the C extension
 task "compile:prism" => ["templates"] # must be before the ExtensionTask is created
@@ -66,7 +68,7 @@ if defined?(RakeCompilerDock)
 
       namespace platform do
         # this runs in the rake-compiler-dock docker container
-        task "build" => ["templates"] do
+        task "build" => ["src/parsey/parse.c", "templates"] do
           Rake::Task["native:#{platform}"].invoke
           Rake::Task["pkg/#{PRISM_SPEC.full_name}-#{Gem::Platform.new(platform)}.gem"].invoke
         end

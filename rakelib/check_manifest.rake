@@ -3,6 +3,7 @@ task check_manifest: :templates do
   raw_gemspec = Bundler.load_gemspec("prism.gemspec")
 
   ignore_directories = %w[
+    .claude
     .bundle
     .idea
     .git
