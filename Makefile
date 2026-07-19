@@ -23,6 +23,9 @@ RMALL ?= rm -f -r
 
 HEADERS := $(wildcard include/*.h include/*/*.h include/*/*/*.h')
 SOURCES := $(wildcard src/*.c src/*/*.c)
+# The wasm builds already trim optional subsystems for size; the generated
+# LALR parser is the largest one, so they build without the parse.y backend.
+WASM_SOURCES := $(filter-out src/parsey/%,$(SOURCES))
 SHARED_OBJECTS := $(subst src/,build/shared/,$(SOURCES:.c=.o))
 STATIC_OBJECTS := $(subst src/,build/static/,$(SOURCES:.c=.o))
 
@@ -55,21 +58,21 @@ javascript/src/prism.wasm: Makefile $(SOURCES) $(HEADERS)
 	$(ECHO) "building $@"
 	$(Q) $(WASI_SDK_PATH)/bin/clang --sysroot=$(WASI_SDK_PATH)/share/wasi-sysroot/ \
 		$(DEBUG_FLAGS) \
-		-DPRISM_EXPORT_SYMBOLS -DPRISM_EXCLUDE_PRETTYPRINT -DPRISM_EXCLUDE_JSON \
+		-DPRISM_EXPORT_SYMBOLS -DPRISM_EXCLUDE_PRETTYPRINT -DPRISM_EXCLUDE_JSON -DPRISM_EXCLUDE_PARSEY \
 		-D_WASI_EMULATED_MMAN -lwasi-emulated-mman $(CPPFLAGS) $(CFLAGS) \
 		-Wl,--export-all -Wl,--gc-sections -Wl,--strip-all -Wl,--lto-O3 -Wl,--no-entry -mexec-model=reactor \
 		-Oz -g0 -flto -fdata-sections -ffunction-sections \
-		-o $@ $(SOURCES)
+		-o $@ $(WASM_SOURCES)
 
 java/wasm/src/main/wasm/prism.wasm: Makefile $(SOURCES) $(HEADERS)
 	$(ECHO) "building $@"
 	$(Q) $(MAKEDIRS) $(@D)
 	$(Q) $(WASI_SDK_PATH)/bin/clang \
 		$(DEBUG_FLAGS) \
-		-DPRISM_EXCLUDE_PRETTYPRINT -DPRISM_EXPORT_SYMBOLS -D_WASI_EMULATED_MMAN \
+		-DPRISM_EXCLUDE_PRETTYPRINT -DPRISM_EXCLUDE_PARSEY -DPRISM_EXPORT_SYMBOLS -D_WASI_EMULATED_MMAN \
 		-lwasi-emulated-mman $(CPPFLAGS) $(JAVA_WASM_CFLAGS) \
 		-Wl,--export-all -Wl,--no-entry -mexec-model=reactor -lc++ -lc++abi \
-		-o $@ $(SOURCES)
+		-o $@ $(WASM_SOURCES)
 
 build/shared/%.o: src/%.c Makefile $(HEADERS)
 	$(ECHO) "compiling $@"

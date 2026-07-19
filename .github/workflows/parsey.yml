@@ -32,6 +32,31 @@ jobs:
       - name: C unit tests
         run: make test-parsey
 
+  excluded-build:
+    name: build without the backend (gem default)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Compile with the backend excluded
+        run: PRISM_PARSEY=0 bundle exec rake compile
+      - name: The backend is absent and requesting it raises
+        run: |
+          ruby -Ilib -rprism -e '
+            raise "backends: #{Prism.backends}" unless Prism.backends == [:prism]
+            begin
+              Prism.parse("1", backend: :parse_y)
+              raise "expected an ArgumentError"
+            rescue ArgumentError
+            end
+            raise "hand parse failed" unless Prism.parse("1 + 2").success?
+          '
+      - name: Test suite (parse.y tests skip themselves)
+        run: bundle exec rake test
+
   generate:
     name: generated parser is current
     runs-on: ubuntu-latest

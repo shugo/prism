@@ -4,6 +4,10 @@ return if RUBY_VERSION < "3.3.0"
 
 require_relative "test_helper"
 
+# The whole file verifies the parse.y backend against the hand-written
+# parser, so a build without it has nothing to test.
+return unless Prism.backends.include?(:parse_y)
+
 module Prism
   # Compares errors between the hand-written parser and the parse.y backend
   # over the error corpus (test/prism/errors), at each fixture's newest

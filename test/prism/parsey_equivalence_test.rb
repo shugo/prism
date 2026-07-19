@@ -2,6 +2,10 @@
 
 require_relative "test_helper"
 
+# The whole file verifies the parse.y backend against the hand-written
+# parser, so a build without it has nothing to test.
+return unless Prism.backends.include?(:parse_y)
+
 module Prism
   # Parses every fixture with both the hand-written parser and the parse.y
   # backend and requires identical trees (compared through Node#inspect, which

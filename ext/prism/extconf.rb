@@ -118,7 +118,19 @@ def add_libprism_source(path)
   src_list path
 end
 
-$srcs = src_list("$(srcdir)") + add_libprism_source("$(srcdir)/../../src") + add_libprism_source("$(srcdir)/../../src/parsey")
+# The parse.y backend adds the generated LALR parser (~300KB of objects) for
+# byte-identical trees, so gem installs default to excluding it. Development
+# checkouts default to including it, since the test suite verifies both
+# backends against each other. Override with --enable-parsey/--disable-parsey
+# or PRISM_PARSEY=1/0.
+parsey_default = File.exist?(File.expand_path("../../rakelib", __dir__))
+parsey_default = ENV["PRISM_PARSEY"] == "1" if ENV.key?("PRISM_PARSEY")
+$srcs = src_list("$(srcdir)") + add_libprism_source("$(srcdir)/../../src")
+if enable_config("parsey", parsey_default)
+  $srcs += add_libprism_source("$(srcdir)/../../src/parsey")
+else
+  append_cppflags("-DPRISM_EXCLUDE_PARSEY")
+end
 $headers += Dir["#{$srcdir}/../../include/**/*.h"]
 
 # Finally, we'll create the `Makefile` that is going to be used to configure and

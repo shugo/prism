@@ -334,4 +334,13 @@ PRISM_EXPORTED_FUNCTION pm_string_t * pm_options_scope_local_mut(pm_options_scop
  */
 PRISM_EXPORTED_FUNCTION void pm_options_scope_forwarding_set(pm_options_scope_t *scope, uint8_t forwarding) PRISM_NONNULL(1);
 
+/**
+ * Query whether the parse.y backend is included in this build. Builds may
+ * exclude it (PRISM_EXCLUDE_PARSEY) to save the size of the generated parser;
+ * requesting the parse_y backend in such a build produces a parse error.
+ *
+ * @return true when pm_parse can dispatch to the parse.y backend.
+ */
+PRISM_EXPORTED_FUNCTION bool pm_parsey_enabled(void);
+
 #endif

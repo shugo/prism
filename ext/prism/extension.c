@@ -242,6 +242,9 @@ build_options_i(VALUE key, VALUE value, VALUE argument) {
             if (!pm_options_backend_set(options, backend, RSTRING_LEN(name))) {
                 rb_raise(rb_eArgError, "invalid backend: %" PRIsVALUE, value);
             }
+            if (!pm_parsey_enabled() && RSTRING_LEN(name) == 7 && strncmp(backend, "parse_y", 7) == 0) {
+                rb_raise(rb_eArgError, "the parse.y backend is not included in this build of prism");
+            }
         }
     } else {
         rb_raise(rb_eArgError, "unknown keyword: %" PRIsVALUE, key);
@@ -918,6 +921,21 @@ parse_input(const uint8_t *input, size_t input_length, const pm_options_t *optio
 }
 
 /**
+ * call-seq: Prism::backends -> Array
+ *
+ * Return the parser implementations compiled into this build of prism, as
+ * symbols accepted by the `backend` option: always `:prism`, plus `:parse_y`
+ * when the parse.y backend is included.
+ */
+static VALUE
+backends(VALUE self) {
+    VALUE result = rb_ary_new_capa(2);
+    rb_ary_push(result, ID2SYM(rb_intern("prism")));
+    if (pm_parsey_enabled()) rb_ary_push(result, ID2SYM(rb_intern("parse_y")));
+    return result;
+}
+
+/**
  * :markup: markdown
  * call-seq:
  *   parse(source, **options) -> ParseResult
@@ -930,6 +948,8 @@ parse_input(const uint8_t *input, size_t input_length, const pm_options_t *optio
  *       `:parse_y` for the parser generated from the fork of CRuby's parse.y
  *       grammar, or nil. When nil, the PRISM_PARSER_BACKEND environment
  *       variable is consulted, and `:prism` is used if that is unset as well.
+ *       The parse.y backend is an opt-in part of the build (see
+ *       `Prism::backends`); requesting it when absent raises ArgumentError.
  * * `command_line` - either nil or a string of the various options that were
  *       set on the command line. Valid values are combinations of "a", "l",
  *       "n", "p", and "x".
@@ -1469,6 +1489,7 @@ Init_prism(void) {
     // Grab up references to all of the constants that we're going to need to
     // reference throughout this extension.
     rb_cPrism = rb_define_module("Prism");
+    rb_define_singleton_method(rb_cPrism, "backends", backends, 0);
     rb_cPrismNode = rb_define_class_under(rb_cPrism, "Node", rb_cObject);
     rb_cPrismSource = rb_define_class_under(rb_cPrism, "Source", rb_cObject);
     rb_cPrismToken = rb_define_class_under(rb_cPrism, "Token", rb_cObject);

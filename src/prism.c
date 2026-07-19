@@ -20,7 +20,9 @@
 #include "prism/internal/node.h"
 #include "prism/internal/options.h"
 #include "prism/internal/parser.h"
+#ifndef PRISM_EXCLUDE_PARSEY
 #include "prism/internal/parsey.h"
+#endif
 #include "prism/internal/regexp.h"
 #include "prism/internal/serialize.h"
 #include "prism/internal/source.h"
@@ -23296,9 +23298,29 @@ pm_parse_continuable(pm_parser_t *parser) {
 /**
  * Parse the Ruby source associated with the given parser and return the tree.
  */
+bool
+pm_parsey_enabled(void) {
+#ifndef PRISM_EXCLUDE_PARSEY
+    return true;
+#else
+    return false;
+#endif
+}
+
 pm_node_t *
 pm_parse(pm_parser_t *parser) {
-    if (parser->backend == PM_OPTIONS_BACKEND_PARSE_Y) return pm_yparse(parser);
+    if (parser->backend == PM_OPTIONS_BACKEND_PARSE_Y) {
+#ifndef PRISM_EXCLUDE_PARSEY
+        return pm_yparse(parser);
+#else
+        /* Parse with the hand-written parser, but do not let the request
+         * silently succeed: the caller asked to verify against a parser that
+         * is not here. */
+        pm_diagnostic_list_append_format(
+            &parser->metadata_arena, &parser->error_list, 0, 0,
+            PM_ERR_PARSEY_SYNTAX, "the parse.y backend is not included in this build");
+#endif
+    }
 
     pm_node_t *node = parse_program(parser);
     pm_parse_continuable(parser);
