@@ -20,6 +20,10 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest]
         ruby: ["3.1", "3.4", "4.0"]
+    env:
+      # The development dependencies do not resolve on older rubies; the
+      # per-version gemfiles carry just what the test suite needs.
+      BUNDLE_GEMFILE: ${{ matrix.ruby == '3.1' && 'gemfiles/3.1/Gemfile' || 'Gemfile' }}
     steps:
       - uses: actions/checkout@v4
       - uses: ruby/setup-ruby@v1
