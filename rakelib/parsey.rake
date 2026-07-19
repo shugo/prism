@@ -65,7 +65,16 @@ namespace :parsey do
     # way.
     Dir.chdir(File.dirname(PARSEY_GRAMMAR)) do
       grammar = File.basename(PARSEY_GRAMMAR)
-      sh "ruby #{id2token} #{grammar} | #{lrama} -o#{File.basename(PARSEY_SOURCE)} -H#{File.basename(PARSEY_HEADER)} - #{grammar}"
+      # Two steps rather than a pipe: a pipe reports only the last command's
+      # status, and lrama happily parses a truncated grammar into a broken
+      # parser if the filter dies mid-stream.
+      filtered = "#{grammar}.i"
+      begin
+        sh "ruby #{id2token} #{grammar} > #{filtered}"
+        sh "#{lrama} -o#{File.basename(PARSEY_SOURCE)} -H#{File.basename(PARSEY_HEADER)} - #{grammar} < #{filtered}"
+      ensure
+        rm_f filtered
+      end
     end
   end
 end

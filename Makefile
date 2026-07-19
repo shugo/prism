@@ -44,7 +44,7 @@ LRAMA ?= bundle exec lrama
 
 src/parsey/parse.c: src/parsey/parse.y src/parsey/defs/id.def src/parsey/tool/id2token.rb
 	$(ECHO) "generating $@ with lrama"
-	$(Q) cd src/parsey && ruby tool/id2token.rb parse.y | $(LRAMA) -oparse.c -Hparse.h - parse.y
+	$(Q) cd src/parsey && ruby tool/id2token.rb parse.y > parse.y.i && $(LRAMA) -oparse.c -Hparse.h - parse.y < parse.y.i && rm -f parse.y.i
 
 src/parsey/parse.h: src/parsey/parse.c
 	$(Q) test -f $@ && touch $@
