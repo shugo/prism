@@ -40,6 +40,14 @@ def parsey_lrama_command
   exe = ["lrama", "lrama.bat"].find { |name| ENV["PATH"].split(File::PATH_SEPARATOR).any? { |dir| File.executable?(File.join(dir, name)) } }
   return exe if exe
 
+  # The bundle may carry the gem without exposing its executable on PATH
+  # (bundler path installs, as CI uses).
+  begin
+    spec = Gem::Specification.find_by_name("lrama")
+    return "#{Gem.ruby} #{File.join(spec.full_gem_path, spec.bindir, "lrama")}"
+  rescue Gem::LoadError
+  end
+
   vendored = File.expand_path("../../ruby/tool/lrama", __dir__)
   return "ruby -I#{vendored}/lib #{vendored}/exe/lrama" if File.exist?("#{vendored}/exe/lrama")
 

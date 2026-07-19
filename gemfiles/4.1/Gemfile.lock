@@ -8,6 +8,7 @@ GEM
   specs:
     ast (2.4.3)
     ffi (1.17.4)
+    lrama (0.8.0)
     onigmo (0.1.0)
     parser (3.3.11.1)
       ast (~> 2.4.1)
@@ -29,6 +30,7 @@ PLATFORMS
 
 DEPENDENCIES
   ffi
+  lrama
   onigmo
   parser
   prism!

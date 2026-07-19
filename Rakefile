@@ -129,7 +129,10 @@ namespace :build do
   task dev: ["build:dev_version_set", "build", "build:dev_version_clear"]
 end
 
-task :build_in_docker => :templates do
+# src/parsey/parse.c: the images are bare compilers, so the parser must be
+# generated on the host; COPY preserves mtimes, so make inside the container
+# sees it as fresh.
+task :build_in_docker => [:templates, "src/parsey/parse.c"] do
   # Versions from https://github.com/ruby/ruby/blob/master/.github/workflows/compilers.yml
   versions = (7..15).to_a
   versions.each do |version|

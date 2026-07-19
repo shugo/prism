@@ -6,6 +6,7 @@ ruby ">= 4.1.0.dev"
 
 gemspec path: "../.."
 
+gem "lrama"
 gem "ffi"
 gem "onigmo", platforms: :ruby
 gem "parser"
