@@ -274,11 +274,13 @@ build_options(VALUE argument) {
     return Qnil;
 }
 
-#ifdef PRISM_XALLOCATOR
+#ifdef PRISM_PARSEY_INTERPRETER_DEFAULT
 /*
- * Defined in CRuby's version.c, where prism is built into the core
- * (PRISM_XALLOCATOR). True when --parser=prism/parse.y selected the parse.y
- * backend interpreter-wide.
+ * A host interpreter that lets its own parser be switched to the parse.y
+ * backend defines PRISM_PARSEY_INTERPRETER_DEFAULT and provides this
+ * predicate (CRuby's version.c, under --parser=prism/parse.y). It cannot be
+ * inferred from PRISM_XALLOCATOR: a CRuby without the integration builds
+ * prism into the core too, and must keep linking.
  */
 bool rb_ruby_prism_parsey_p(void);
 #endif
@@ -290,12 +292,11 @@ static void
 extract_options(pm_options_t *options, VALUE filepath, VALUE keywords) {
     pm_options_line_set(options, 1); /* default */
 
-#ifdef PRISM_XALLOCATOR
+#ifdef PRISM_PARSEY_INTERPRETER_DEFAULT
     /*
-     * When prism is built into CRuby, default to the backend selected
-     * interpreter-wide by --parser, so that re-parses observe the node ids
-     * of compiled code (e.g. error_highlight). An explicit backend keyword
-     * overrides this.
+     * Default to the backend the host interpreter selected (--parser), so
+     * that re-parses observe the node ids of compiled code (e.g.
+     * error_highlight). An explicit backend keyword overrides this.
      */
     if (rb_ruby_prism_parsey_p()) {
         pm_options_backend_set(options, "parse_y", 7);
