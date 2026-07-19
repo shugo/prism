@@ -50,7 +50,7 @@ jobs:
         working-directory: ruby/prism/src/parsey
         run: |
           set -euo pipefail
-          ruby tool/id2token.rb parse.y | ruby -I../../../ruby/tool/lrama/lib ../../../ruby/tool/lrama/exe/lrama -oparse.c -Hparse.h - parse.y
+          ruby -p tool/id2token.rb parse.y | ruby -I../../../ruby/tool/lrama/lib ../../../ruby/tool/lrama/exe/lrama -oparse.c -Hparse.h - parse.y
       - run: tool/sync_default_gems.rb prism
         working-directory: ruby/ruby
       - name: Add the parse.y backend to CRuby's prism build

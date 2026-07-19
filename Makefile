@@ -42,9 +42,12 @@ all: shared static
 
 LRAMA ?= bundle exec lrama
 
+# The explicit -p repeats the filter's shebang flag: only CRuby re-reads
+# flags from a script's shebang, and without it JRuby runs the filter as a
+# no-op that silently emits an empty grammar.
 src/parsey/parse.c: src/parsey/parse.y src/parsey/defs/id.def src/parsey/tool/id2token.rb
 	$(ECHO) "generating $@ with lrama"
-	$(Q) cd src/parsey && ruby tool/id2token.rb parse.y > parse.y.i && $(LRAMA) -oparse.c -Hparse.h - parse.y < parse.y.i && rm -f parse.y.i
+	$(Q) cd src/parsey && ruby -p tool/id2token.rb parse.y > parse.y.i && $(LRAMA) -oparse.c -Hparse.h - parse.y < parse.y.i && rm -f parse.y.i
 
 src/parsey/parse.h: src/parsey/parse.c
 	$(Q) test -f $@ && touch $@

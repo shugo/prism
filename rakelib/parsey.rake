@@ -78,7 +78,10 @@ namespace :parsey do
       # parser if the filter dies mid-stream.
       filtered = "#{grammar}.i"
       begin
-        sh "ruby #{id2token} #{grammar} > #{filtered}"
+        # -p repeats the filter's shebang flag: only CRuby re-reads flags
+        # from a script's shebang, and without it JRuby runs the filter as
+        # a no-op that silently emits an empty grammar.
+        sh "ruby -p #{id2token} #{grammar} > #{filtered}"
         sh "#{lrama} -o#{File.basename(PARSEY_SOURCE)} -H#{File.basename(PARSEY_HEADER)} - #{grammar} < #{filtered}"
       ensure
         rm_f filtered
