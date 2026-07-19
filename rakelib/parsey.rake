@@ -96,8 +96,11 @@ end
 
 file PARSEY_HEADER => PARSEY_SOURCE
 
-# The compile task needs the generated parser, except when the build excludes
-# the backend (the same signal ext/prism/extconf.rb reads).
+# The compile tasks need the generated parser, except when the build excludes
+# the backend (the same signal ext/prism/extconf.rb reads). compile:prism is
+# hooked separately: the typecheck tasks invoke it directly, bypassing
+# :compile.
 unless ENV["PRISM_PARSEY"] == "0"
   task compile: PARSEY_SOURCE if Rake::Task.task_defined?(:compile)
+  task "compile:prism" => PARSEY_SOURCE if Rake::Task.task_defined?("compile:prism")
 end
