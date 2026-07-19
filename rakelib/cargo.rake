@@ -16,6 +16,12 @@ namespace :cargo do
     cp_r("./include", prism_sys_vendor_dir.join("include"))
     cp_r("./src", prism_sys_vendor_dir.join("src"))
 
+    # The parse.y backend is an opt-in part of the build that the Rust
+    # bindings do not expose; its parser is generated (rake parsey:generate)
+    # and may not even be present. The build script defines
+    # PRISM_EXCLUDE_PARSEY to match.
+    rm_rf(prism_sys_vendor_dir.join("src/parsey"))
+
     prism_dir = Pathname(File.expand_path(File.join(__dir__, "../rust", "ruby-prism")))
     prism_vendor_dir = prism_dir.join("vendor/prism-#{gemspec.version}")
 

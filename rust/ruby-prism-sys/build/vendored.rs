@@ -16,7 +16,9 @@ pub fn build(custom_cflags: Vec<String>) -> Result<Vec<String>, Box<dyn std::err
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR is not set"));
     let mut build = cc::Build::new();
 
-    let mut defines = vec![("PRISM_EXPORT_SYMBOLS", "1")];
+    // The vendored sources ship without the opt-in parse.y backend (see
+    // rakelib/cargo.rake), so the dispatch must not reference it.
+    let mut defines = vec![("PRISM_EXPORT_SYMBOLS", "1"), ("PRISM_EXCLUDE_PARSEY", "1")];
     let mut includes = vec![include_dir()];
     let mut flags = vec![];
 
