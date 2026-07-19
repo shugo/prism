@@ -8,6 +8,14 @@ require_relative "test_helper"
 # this suite against whatever prism gem is installed, including older ones.
 return unless Prism.respond_to?(:backends) && Prism.backends.include?(:parse_y)
 
+# These files verify the repository's own build of the backend against the
+# hand-written parser. When the suite runs against an installed gem (the gem
+# packaging tests), that is not what is being tested; skip.
+if (spec = Gem.loaded_specs["prism"])
+  repository = File.expand_path("../..", __dir__)
+  return unless File.identical?(spec.full_gem_path, repository)
+end
+
 module Prism
   # Parses every fixture with both the hand-written parser and the parse.y
   # backend and requires identical trees (compared through Node#inspect, which
