@@ -16,12 +16,14 @@ module Prism
     # changed. So here we're going to force it to be UTF-8 to keep the snapshots
     # consistent.
     def setup
+      super
       @previous_default_external = Encoding.default_external
       ignore_warnings { Encoding.default_external = Encoding::UTF_8 }
     end
 
     def teardown
       ignore_warnings { Encoding.default_external = @previous_default_external }
+      super
     end
 
     except = []
