@@ -145,7 +145,11 @@ if enable_config("parsey", parsey_default)
   end
   $srcs += add_libprism_source("$(srcdir)/../../src/parsey")
 else
-  append_cppflags("-DPRISM_EXCLUDE_PARSEY")
+  # Not append_cppflags: that probes the flag with a trial compile, and on
+  # platforms where the probe itself fails to build (macOS runners with Ruby
+  # 3.1) the define is silently dropped, leaving prism.c dispatching to a
+  # pm_yparse that was never linked in. A plain define needs no probe.
+  $defs.push("-DPRISM_EXCLUDE_PARSEY")
 end
 $headers += Dir["#{$srcdir}/../../include/**/*.h"]
 
