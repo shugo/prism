@@ -36,6 +36,7 @@ task check_manifest: :templates do
   ]
 
   ignore_files = %w[
+    CLAUDE.md
     .git # in worktrees this is a file, not a directory
     .ruby-version
     .editorconfig
