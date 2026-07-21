@@ -94,13 +94,17 @@ end
 # feature/prism-parsey), where a plain `make` regenerates the parser and the
 # full CRuby test suite is at hand. These paths (CRuby name => fork name) are
 # owned by that side and flow back here with parsey:sync_from_cruby; syncs in
-# the other direction must leave them alone.
+# the other direction must leave them alone.  Both sides are pathspecs, so a
+# test file added on the CRuby side comes along without touching this table.
 PARSEY_CRUBY_OWNED = {
   "prism/parsey" => "src/parsey",
   "test/prism/parsey" => "test/prism/parsey",
-  "test/prism/parsey_equivalence_test.rb" => "test/prism/parsey_equivalence_test.rb",
-  "test/prism/parsey_errors_test.rb" => "test/prism/parsey_errors_test.rb",
+  "test/prism/parsey_*_test.rb" => "test/prism/parsey_*_test.rb",
 }
+
+# Files under those paths that stay on the CRuby side: .document keeps the
+# vendored generator inputs out of ruby/ruby's RDoc coverage run.
+PARSEY_CRUBY_ONLY = ["prism/parsey/.document"]
 
 # CRuby path of a fork file under the gem sync mapping, or nil when the file
 # has no synced counterpart (fork-only infrastructure, snapshots, extconf).
@@ -123,6 +127,7 @@ namespace :parsey do
   desc "Sync the CRuby-owned backend paths from a ruby/ruby checkout"
   task :sync_from_cruby, [:cruby] do |_t, args|
     require "set"
+    require "shellwords"
     require "tmpdir"
 
     cruby = args[:cruby] || ENV["CRUBY"]
@@ -133,6 +138,10 @@ namespace :parsey do
 
     fork_paths = PARSEY_CRUBY_OWNED.values
     cruby_paths = PARSEY_CRUBY_OWNED.keys
+    # Quoted: the globs are git pathspecs, matched against each tree, not
+    # against the working directory the task happens to run in.
+    fork_spec = fork_paths.shelljoin
+    cruby_spec = cruby_paths.shelljoin
 
     # Refuse to clobber backend commits made here since the last sync: those
     # changes belong on the CRuby side. The sync commits carry a
@@ -143,7 +152,7 @@ namespace :parsey do
       puts "No previous sync commit found; skipping the divergence check."
     else
       previous = `git log -1 --format=%B #{last_sync}`[/^cruby-commit: (\h+)/, 1]
-      stray = `git log --oneline #{last_sync}..HEAD -- #{fork_paths.join(" ")}`
+      stray = `git log --oneline #{last_sync}..HEAD -- #{fork_spec}`
       unless stray.empty? || ENV["FORCE"] == "1"
         abort "CRuby-owned paths have fork-side commits since the last sync" \
               " (FORCE=1 overrides):\n#{stray}"
@@ -152,7 +161,7 @@ namespace :parsey do
 
     # Sync from HEAD, not the working tree, so the commit recorded in the
     # marker is the state actually taken.
-    dirty = `git -C #{cruby} status --porcelain -- #{cruby_paths.join(" ")}`
+    dirty = `git -C #{cruby} status --porcelain -- #{cruby_spec}`
     unless dirty.empty?
       abort "#{cruby} has uncommitted changes under the synced paths;" \
             " commit them first:\n#{dirty}"
@@ -160,29 +169,29 @@ namespace :parsey do
 
     head = `git -C #{cruby} rev-parse HEAD`.strip
     Dir.mktmpdir do |tmp|
-      sh "git -C #{cruby} archive HEAD -- #{cruby_paths.join(" ")} | tar -x -C #{tmp}"
+      sh "git -C #{cruby} archive HEAD -- #{cruby_spec} | tar -x -C #{tmp}"
+      PARSEY_CRUBY_ONLY.each { |path| rm_f File.join(tmp, path) }
       # Delete-and-copy so that files removed on the CRuby side disappear;
       # ignored files (the generated parser) are left in place.
-      `git ls-files -z -- #{fork_paths.join(" ")}`.split("\0").each { |file| rm_f file }
+      `git ls-files -z -- #{fork_spec}`.split("\0").each { |file| rm_f file }
       PARSEY_CRUBY_OWNED.each do |from, to|
-        from = File.join(tmp, from)
-        next unless File.exist?(from)
-
-        if File.directory?(from)
-          mkdir_p to
-          cp_r File.join(from, "."), to
-        else
-          cp from, to
+        Dir.glob(File.join(tmp, from)).each do |source|
+          if File.directory?(source)
+            mkdir_p to
+            cp_r File.join(source, "."), to
+          else
+            cp source, File.join(File.dirname(to), File.basename(source))
+          end
         end
       end
     end
 
-    changed = `git status --porcelain -- #{fork_paths.join(" ")}`
+    changed = `git status --porcelain -- #{fork_spec}`
     if changed.empty?
       puts "Already in sync with ruby/ruby #{head}."
     else
       range = previous ? "#{previous[0, 10]}..#{head[0, 10]}" : head[0, 10]
-      taken = previous ? `git -C #{cruby} log --oneline #{previous}..#{head} -- #{cruby_paths.join(" ")}` : ""
+      taken = previous ? `git -C #{cruby} log --oneline #{previous}..#{head} -- #{cruby_spec}` : ""
       puts changed
       body = taken.lines.map { |line| "* #{line}" }.join
       body << "\n" unless body.empty?
@@ -200,7 +209,7 @@ namespace :parsey do
     # direction fits the change; report any that have drifted apart.
     tracked = `git -C #{cruby} ls-files -z`.split("\0").to_set
     drifted = `git ls-files -z`.split("\0").filter_map do |path|
-      next if fork_paths.any? { |owned| path == owned || path.start_with?("#{owned}/") }
+      next if fork_paths.any? { |owned| File.fnmatch?(owned, path) || path.start_with?("#{owned}/") }
 
       counterpart = parsey_cruby_counterpart(path)
       next unless counterpart && tracked.include?(counterpart)
