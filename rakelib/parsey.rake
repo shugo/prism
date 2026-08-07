@@ -82,7 +82,10 @@ namespace :parsey do
         # from a script's shebang, and without it JRuby runs the filter as
         # a no-op that silently emits an empty grammar.
         sh "ruby -p #{id2token} #{grammar} > #{filtered}"
-        sh "#{lrama} -o#{File.basename(PARSEY_SOURCE)} -H#{File.basename(PARSEY_HEADER)} - #{grammar} < #{filtered}"
+        # PARSEY_DELR=1 generates the directly-executable parser (needs a
+        # lrama with %define parse.delr support).
+        delr = ENV["PARSEY_DELR"] == "1" ? " -Dparse.delr" : ""
+        sh "#{lrama} -o#{File.basename(PARSEY_SOURCE)} -H#{File.basename(PARSEY_HEADER)}#{delr} - #{grammar} < #{filtered}"
       ensure
         rm_f filtered
       end
