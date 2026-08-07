@@ -30,57 +30,76 @@ module Prism
   sig { params(callable: ::T.any(Method, UnboundMethod, Proc, Thread::Backtrace::Location), rubyvm: T::Boolean).returns(::T.nilable(Node)) }
   def self.find(callable, rubyvm: T.unsafe(nil)); end
 
+  # The backend used by parses that are not given an explicit +backend+
+  # option, or nil (the default) when it is chosen by the host interpreter's
+  # own parser selection or the PRISM_PARSER_BACKEND environment variable.
+  sig { returns(::T.nilable(Symbol)) }
+  def self.default_backend; end
+
+  # Set the backend used by parses that are not given an explicit +backend+
+  # option, overriding both the host interpreter's parser selection and the
+  # PRISM_PARSER_BACKEND environment variable. Accepts the symbols returned
+  # by Prism::backends, or nil to restore those defaults.
+  sig { params(backend: ::T.nilable(Symbol)).returns(::T.nilable(Symbol)) }
+  def self.default_backend=(backend); end
+
   VERSION = T.let(nil, String)
   BACKEND = T.let(nil, Symbol)
 
-  sig { params(source: String, filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseResult) }
-  def self.parse(source, filepath: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { returns(T::Array[Symbol]) }
+  def self.backends; end
 
-  sig { params(source: String, filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).void }
-  def self.profile(source, filepath: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(backend: ::T.nilable(Symbol)).void }
+  def self.__set_default_backend_native(backend); end
 
-  sig { params(source: String, filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(LexResult) }
-  def self.lex(source, filepath: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(source: String, filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseResult) }
+  def self.parse(source, filepath: T.unsafe(nil), backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(source: String, filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseLexResult) }
-  def self.parse_lex(source, filepath: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(source: String, filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).void }
+  def self.profile(source, filepath: T.unsafe(nil), backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(source: String, filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(String) }
-  def self.dump(source, filepath: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(source: String, filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(LexResult) }
+  def self.lex(source, filepath: T.unsafe(nil), backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(source: String, filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Array[Comment]) }
-  def self.parse_comments(source, filepath: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(source: String, filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseLexResult) }
+  def self.parse_lex(source, filepath: T.unsafe(nil), backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(source: String, filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Boolean) }
-  def self.parse_success?(source, filepath: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(source: String, filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(String) }
+  def self.dump(source, filepath: T.unsafe(nil), backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(source: String, filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Boolean) }
-  def self.parse_failure?(source, filepath: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(source: String, filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Array[Comment]) }
+  def self.parse_comments(source, filepath: T.unsafe(nil), backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(stream: ::T.untyped, filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseResult) }
-  def self.parse_stream(stream, filepath: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(source: String, filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Boolean) }
+  def self.parse_success?(source, filepath: T.unsafe(nil), backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseResult) }
-  def self.parse_file(filepath, command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(source: String, filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Boolean) }
+  def self.parse_failure?(source, filepath: T.unsafe(nil), backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).void }
-  def self.profile_file(filepath, command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(stream: ::T.untyped, filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseResult) }
+  def self.parse_stream(stream, filepath: T.unsafe(nil), backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(LexResult) }
-  def self.lex_file(filepath, command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseResult) }
+  def self.parse_file(filepath, backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseLexResult) }
-  def self.parse_lex_file(filepath, command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).void }
+  def self.profile_file(filepath, backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(String) }
-  def self.dump_file(filepath, command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(LexResult) }
+  def self.lex_file(filepath, backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Array[Comment]) }
-  def self.parse_file_comments(filepath, command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(ParseLexResult) }
+  def self.parse_lex_file(filepath, backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Boolean) }
-  def self.parse_file_success?(filepath, command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(String) }
+  def self.dump_file(filepath, backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 
-  sig { params(filepath: String, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Boolean) }
-  def self.parse_file_failure?(filepath, command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+  sig { params(filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Array[Comment]) }
+  def self.parse_file_comments(filepath, backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+
+  sig { params(filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Boolean) }
+  def self.parse_file_success?(filepath, backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
+
+  sig { params(filepath: String, backend: Symbol, command_line: String, encoding: ::T.any(Encoding, FalseClass), freeze: T::Boolean, frozen_string_literal: T::Boolean, line: Integer, main_script: T::Boolean, partial_script: T::Boolean, scopes: T::Array[T::Array[Symbol]], version: String).returns(T::Boolean) }
+  def self.parse_file_failure?(filepath, backend: T.unsafe(nil), command_line: T.unsafe(nil), encoding: T.unsafe(nil), freeze: T.unsafe(nil), frozen_string_literal: T.unsafe(nil), line: T.unsafe(nil), main_script: T.unsafe(nil), partial_script: T.unsafe(nil), scopes: T.unsafe(nil), version: T.unsafe(nil)); end
 end

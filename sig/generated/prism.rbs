@@ -40,45 +40,70 @@ module Prism
   # : (Method | UnboundMethod | Proc | Thread::Backtrace::Location callable, ?rubyvm: bool) -> Node?
   def self.find: (Method | UnboundMethod | Proc | Thread::Backtrace::Location callable, ?rubyvm: bool) -> Node?
 
+  # :call-seq:
+  #   Prism::default_backend -> Symbol | nil
+  #
+  # The backend used by parses that are not given an explicit +backend+
+  # option, or nil (the default) when it is chosen by the host interpreter's
+  # own parser selection or the PRISM_PARSER_BACKEND environment variable.
+  # --
+  # : () -> Symbol?
+  def self.default_backend: () -> Symbol?
+
+  # :call-seq:
+  #   Prism::default_backend = Symbol | nil
+  #
+  # Set the backend used by parses that are not given an explicit +backend+
+  # option, overriding both the host interpreter's parser selection and the
+  # PRISM_PARSER_BACKEND environment variable. Accepts the symbols returned
+  # by Prism::backends, or nil to restore those defaults.
+  # --
+  # : (Symbol? backend) -> Symbol?
+  def self.default_backend=: (Symbol? backend) -> Symbol?
+
   VERSION: String
 
   BACKEND: :CEXT | :FFI
+
+  def self.backends: () -> Array[Symbol]
+
+  def self.__set_default_backend_native: (Symbol? backend) -> void
 
   interface _Stream
     def gets: (?Integer integer) -> (String | nil)
   end
 
-  def self.parse: (String source, ?filepath: String, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> ParseResult
+  def self.parse: (String source, ?filepath: String, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> ParseResult
 
-  def self.profile: (String source, ?filepath: String, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> void
+  def self.profile: (String source, ?filepath: String, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> void
 
-  def self.lex: (String source, ?filepath: String, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> LexResult
+  def self.lex: (String source, ?filepath: String, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> LexResult
 
-  def self.parse_lex: (String source, ?filepath: String, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> ParseLexResult
+  def self.parse_lex: (String source, ?filepath: String, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> ParseLexResult
 
-  def self.dump: (String source, ?filepath: String, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> String
+  def self.dump: (String source, ?filepath: String, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> String
 
-  def self.parse_comments: (String source, ?filepath: String, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> Array[Comment]
+  def self.parse_comments: (String source, ?filepath: String, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> Array[Comment]
 
-  def self.parse_success?: (String source, ?filepath: String, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> bool
+  def self.parse_success?: (String source, ?filepath: String, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> bool
 
-  def self.parse_failure?: (String source, ?filepath: String, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> bool
+  def self.parse_failure?: (String source, ?filepath: String, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> bool
 
-  def self.parse_stream: (_Stream stream, ?filepath: String, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> ParseResult
+  def self.parse_stream: (_Stream stream, ?filepath: String, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> ParseResult
 
-  def self.parse_file: (String filepath, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> ParseResult
+  def self.parse_file: (String filepath, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> ParseResult
 
-  def self.profile_file: (String filepath, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> void
+  def self.profile_file: (String filepath, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> void
 
-  def self.lex_file: (String filepath, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> LexResult
+  def self.lex_file: (String filepath, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> LexResult
 
-  def self.parse_lex_file: (String filepath, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> ParseLexResult
+  def self.parse_lex_file: (String filepath, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> ParseLexResult
 
-  def self.dump_file: (String filepath, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> String
+  def self.dump_file: (String filepath, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> String
 
-  def self.parse_file_comments: (String filepath, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> Array[Comment]
+  def self.parse_file_comments: (String filepath, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> Array[Comment]
 
-  def self.parse_file_success?: (String filepath, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> bool
+  def self.parse_file_success?: (String filepath, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> bool
 
-  def self.parse_file_failure?: (String filepath, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> bool
+  def self.parse_file_failure?: (String filepath, ?backend: Symbol, ?command_line: String, ?encoding: Encoding | false, ?freeze: bool, ?frozen_string_literal: bool, ?line: Integer, ?main_script: bool, ?partial_script: bool, ?scopes: Array[Array[Symbol]], ?version: String) -> bool
 end

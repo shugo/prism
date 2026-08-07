@@ -1,0 +1,272 @@
+@ ProgramNode (location: (2,0)-(20,8))
+├── flags: ∅
+├── locals: []
+└── statements:
+    @ StatementsNode (location: (2,0)-(20,8))
+    ├── flags: ∅
+    └── body: (length: 13)
+        ├── @ ShareableConstantNode (location: (2,0)-(2,17))
+        │   ├── flags: newline, literal
+        │   └── write:
+        │       @ ConstantWriteNode (location: (2,0)-(2,17))
+        │       ├── flags: ∅
+        │       ├── name: :A
+        │       ├── name_loc: (2,0)-(2,1) = "A"
+        │       ├── value:
+        │       │   @ ArrayNode (location: (2,4)-(2,17))
+        │       │   ├── flags: ∅
+        │       │   ├── elements: (length: 2)
+        │       │   │   ├── @ IntegerNode (location: (2,5)-(2,6))
+        │       │   │   │   ├── flags: static_literal, decimal
+        │       │   │   │   └── value: 1
+        │       │   │   └── @ HashNode (location: (2,8)-(2,16))
+        │       │   │       ├── flags: ∅
+        │       │   │       ├── opening_loc: (2,8)-(2,9) = "{"
+        │       │   │       ├── elements: (length: 1)
+        │       │   │       │   └── @ AssocNode (location: (2,9)-(2,15))
+        │       │   │       │       ├── flags: ∅
+        │       │   │       │       ├── key:
+        │       │   │       │       │   @ SymbolNode (location: (2,9)-(2,11))
+        │       │   │       │       │   ├── flags: static_literal, forced_us_ascii_encoding
+        │       │   │       │       │   ├── opening_loc: ∅
+        │       │   │       │       │   ├── value_loc: (2,9)-(2,10) = "a"
+        │       │   │       │       │   ├── closing_loc: (2,10)-(2,11) = ":"
+        │       │   │       │       │   └── unescaped: "a"
+        │       │   │       │       ├── value:
+        │       │   │       │       │   @ StringNode (location: (2,12)-(2,15))
+        │       │   │       │       │   ├── flags: ∅
+        │       │   │       │       │   ├── opening_loc: (2,12)-(2,13) = "\""
+        │       │   │       │       │   ├── content_loc: (2,13)-(2,14) = "b"
+        │       │   │       │       │   ├── closing_loc: (2,14)-(2,15) = "\""
+        │       │   │       │       │   └── unescaped: "b"
+        │       │   │       │       └── operator_loc: ∅
+        │       │   │       └── closing_loc: (2,15)-(2,16) = "}"
+        │       │   ├── opening_loc: (2,4)-(2,5) = "["
+        │       │   └── closing_loc: (2,16)-(2,17) = "]"
+        │       └── operator_loc: (2,2)-(2,3) = "="
+        ├── @ ShareableConstantNode (location: (3,0)-(3,9))
+        │   ├── flags: newline, literal
+        │   └── write:
+        │       @ ConstantOrWriteNode (location: (3,0)-(3,9))
+        │       ├── flags: ∅
+        │       ├── name: :B
+        │       ├── name_loc: (3,0)-(3,1) = "B"
+        │       ├── operator_loc: (3,2)-(3,5) = "||="
+        │       └── value:
+        │           @ ArrayNode (location: (3,6)-(3,9))
+        │           ├── flags: static_literal
+        │           ├── elements: (length: 1)
+        │           │   └── @ IntegerNode (location: (3,7)-(3,8))
+        │           │       ├── flags: static_literal, decimal
+        │           │       └── value: 2
+        │           ├── opening_loc: (3,6)-(3,7) = "["
+        │           └── closing_loc: (3,8)-(3,9) = "]"
+        ├── @ ShareableConstantNode (location: (4,0)-(4,9))
+        │   ├── flags: newline, literal
+        │   └── write:
+        │       @ ConstantAndWriteNode (location: (4,0)-(4,9))
+        │       ├── flags: ∅
+        │       ├── name: :C
+        │       ├── name_loc: (4,0)-(4,1) = "C"
+        │       ├── operator_loc: (4,2)-(4,5) = "&&="
+        │       └── value:
+        │           @ ArrayNode (location: (4,6)-(4,9))
+        │           ├── flags: static_literal
+        │           ├── elements: (length: 1)
+        │           │   └── @ IntegerNode (location: (4,7)-(4,8))
+        │           │       ├── flags: static_literal, decimal
+        │           │       └── value: 3
+        │           ├── opening_loc: (4,6)-(4,7) = "["
+        │           └── closing_loc: (4,8)-(4,9) = "]"
+        ├── @ ShareableConstantNode (location: (5,0)-(5,6))
+        │   ├── flags: newline, literal
+        │   └── write:
+        │       @ ConstantOperatorWriteNode (location: (5,0)-(5,6))
+        │       ├── flags: ∅
+        │       ├── name: :D
+        │       ├── name_loc: (5,0)-(5,1) = "D"
+        │       ├── binary_operator_loc: (5,2)-(5,4) = "+="
+        │       ├── value:
+        │       │   @ IntegerNode (location: (5,5)-(5,6))
+        │       │   ├── flags: static_literal, decimal
+        │       │   └── value: 4
+        │       └── binary_operator: :+
+        ├── @ ShareableConstantNode (location: (6,0)-(6,8))
+        │   ├── flags: newline, literal
+        │   └── write:
+        │       @ ConstantPathWriteNode (location: (6,0)-(6,8))
+        │       ├── flags: ∅
+        │       ├── target:
+        │       │   @ ConstantPathNode (location: (6,0)-(6,4))
+        │       │   ├── flags: ∅
+        │       │   ├── parent:
+        │       │   │   @ ConstantReadNode (location: (6,0)-(6,1))
+        │       │   │   ├── flags: ∅
+        │       │   │   └── name: :E
+        │       │   ├── name: :F
+        │       │   ├── delimiter_loc: (6,1)-(6,3) = "::"
+        │       │   └── name_loc: (6,3)-(6,4) = "F"
+        │       ├── operator_loc: (6,5)-(6,6) = "="
+        │       └── value:
+        │           @ IntegerNode (location: (6,7)-(6,8))
+        │           ├── flags: static_literal, decimal
+        │           └── value: 5
+        ├── @ ShareableConstantNode (location: (7,0)-(7,7))
+        │   ├── flags: newline, literal
+        │   └── write:
+        │       @ ConstantPathWriteNode (location: (7,0)-(7,7))
+        │       ├── flags: ∅
+        │       ├── target:
+        │       │   @ ConstantPathNode (location: (7,0)-(7,3))
+        │       │   ├── flags: ∅
+        │       │   ├── parent: ∅
+        │       │   ├── name: :G
+        │       │   ├── delimiter_loc: (7,0)-(7,2) = "::"
+        │       │   └── name_loc: (7,2)-(7,3) = "G"
+        │       ├── operator_loc: (7,4)-(7,5) = "="
+        │       └── value:
+        │           @ IntegerNode (location: (7,6)-(7,7))
+        │           ├── flags: static_literal, decimal
+        │           └── value: 6
+        ├── @ ShareableConstantNode (location: (8,0)-(8,10))
+        │   ├── flags: newline, literal
+        │   └── write:
+        │       @ ConstantPathOrWriteNode (location: (8,0)-(8,10))
+        │       ├── flags: ∅
+        │       ├── target:
+        │       │   @ ConstantPathNode (location: (8,0)-(8,4))
+        │       │   ├── flags: ∅
+        │       │   ├── parent:
+        │       │   │   @ ConstantReadNode (location: (8,0)-(8,1))
+        │       │   │   ├── flags: ∅
+        │       │   │   └── name: :E
+        │       │   ├── name: :F
+        │       │   ├── delimiter_loc: (8,1)-(8,3) = "::"
+        │       │   └── name_loc: (8,3)-(8,4) = "F"
+        │       ├── operator_loc: (8,5)-(8,8) = "||="
+        │       └── value:
+        │           @ IntegerNode (location: (8,9)-(8,10))
+        │           ├── flags: static_literal, decimal
+        │           └── value: 7
+        ├── @ ShareableConstantNode (location: (9,0)-(9,9))
+        │   ├── flags: newline, literal
+        │   └── write:
+        │       @ ConstantPathOperatorWriteNode (location: (9,0)-(9,9))
+        │       ├── flags: ∅
+        │       ├── target:
+        │       │   @ ConstantPathNode (location: (9,0)-(9,4))
+        │       │   ├── flags: ∅
+        │       │   ├── parent:
+        │       │   │   @ ConstantReadNode (location: (9,0)-(9,1))
+        │       │   │   ├── flags: ∅
+        │       │   │   └── name: :E
+        │       │   ├── name: :F
+        │       │   ├── delimiter_loc: (9,1)-(9,3) = "::"
+        │       │   └── name_loc: (9,3)-(9,4) = "F"
+        │       ├── binary_operator_loc: (9,5)-(9,7) = "+="
+        │       ├── value:
+        │       │   @ IntegerNode (location: (9,8)-(9,9))
+        │       │   ├── flags: static_literal, decimal
+        │       │   └── value: 8
+        │       └── binary_operator: :+
+        ├── @ ShareableConstantNode (location: (11,0)-(11,7))
+        │   ├── flags: newline, experimental_everything
+        │   └── write:
+        │       @ ConstantWriteNode (location: (11,0)-(11,7))
+        │       ├── flags: ∅
+        │       ├── name: :H
+        │       ├── name_loc: (11,0)-(11,1) = "H"
+        │       ├── value:
+        │       │   @ CallNode (location: (11,4)-(11,7))
+        │       │   ├── flags: variable_call, ignore_visibility
+        │       │   ├── receiver: ∅
+        │       │   ├── call_operator_loc: ∅
+        │       │   ├── name: :foo
+        │       │   ├── message_loc: (11,4)-(11,7) = "foo"
+        │       │   ├── opening_loc: ∅
+        │       │   ├── arguments: ∅
+        │       │   ├── closing_loc: ∅
+        │       │   ├── equal_loc: ∅
+        │       │   └── block: ∅
+        │       └── operator_loc: (11,2)-(11,3) = "="
+        ├── @ ShareableConstantNode (location: (13,0)-(13,7))
+        │   ├── flags: newline, experimental_copy
+        │   └── write:
+        │       @ ConstantWriteNode (location: (13,0)-(13,7))
+        │       ├── flags: ∅
+        │       ├── name: :I
+        │       ├── name_loc: (13,0)-(13,1) = "I"
+        │       ├── value:
+        │       │   @ CallNode (location: (13,4)-(13,7))
+        │       │   ├── flags: variable_call, ignore_visibility
+        │       │   ├── receiver: ∅
+        │       │   ├── call_operator_loc: ∅
+        │       │   ├── name: :bar
+        │       │   ├── message_loc: (13,4)-(13,7) = "bar"
+        │       │   ├── opening_loc: ∅
+        │       │   ├── arguments: ∅
+        │       │   ├── closing_loc: ∅
+        │       │   ├── equal_loc: ∅
+        │       │   └── block: ∅
+        │       └── operator_loc: (13,2)-(13,3) = "="
+        ├── @ ConstantWriteNode (location: (15,0)-(15,7))
+        │   ├── flags: newline
+        │   ├── name: :J
+        │   ├── name_loc: (15,0)-(15,1) = "J"
+        │   ├── value:
+        │   │   @ ArrayNode (location: (15,4)-(15,7))
+        │   │   ├── flags: static_literal
+        │   │   ├── elements: (length: 1)
+        │   │   │   └── @ IntegerNode (location: (15,5)-(15,6))
+        │   │   │       ├── flags: static_literal, decimal
+        │   │   │       └── value: 9
+        │   │   ├── opening_loc: (15,4)-(15,5) = "["
+        │   │   └── closing_loc: (15,6)-(15,7) = "]"
+        │   └── operator_loc: (15,2)-(15,3) = "="
+        ├── @ ClassNode (location: (16,0)-(19,3))
+        │   ├── flags: newline
+        │   ├── locals: []
+        │   ├── class_keyword_loc: (16,0)-(16,5) = "class"
+        │   ├── constant_path:
+        │   │   @ ConstantReadNode (location: (16,6)-(16,7))
+        │   │   ├── flags: ∅
+        │   │   └── name: :K
+        │   ├── inheritance_operator_loc: ∅
+        │   ├── superclass: ∅
+        │   ├── body:
+        │   │   @ StatementsNode (location: (18,2)-(18,10))
+        │   │   ├── flags: ∅
+        │   │   └── body: (length: 1)
+        │   │       └── @ ShareableConstantNode (location: (18,2)-(18,10))
+        │   │           ├── flags: newline, literal
+        │   │           └── write:
+        │   │               @ ConstantWriteNode (location: (18,2)-(18,10))
+        │   │               ├── flags: ∅
+        │   │               ├── name: :L
+        │   │               ├── name_loc: (18,2)-(18,3) = "L"
+        │   │               ├── value:
+        │   │               │   @ ArrayNode (location: (18,6)-(18,10))
+        │   │               │   ├── flags: static_literal
+        │   │               │   ├── elements: (length: 1)
+        │   │               │   │   └── @ IntegerNode (location: (18,7)-(18,9))
+        │   │               │   │       ├── flags: static_literal, decimal
+        │   │               │   │       └── value: 10
+        │   │               │   ├── opening_loc: (18,6)-(18,7) = "["
+        │   │               │   └── closing_loc: (18,9)-(18,10) = "]"
+        │   │               └── operator_loc: (18,4)-(18,5) = "="
+        │   ├── end_keyword_loc: (19,0)-(19,3) = "end"
+        │   └── name: :K
+        └── @ ConstantWriteNode (location: (20,0)-(20,8))
+            ├── flags: newline
+            ├── name: :M
+            ├── name_loc: (20,0)-(20,1) = "M"
+            ├── value:
+            │   @ ArrayNode (location: (20,4)-(20,8))
+            │   ├── flags: static_literal
+            │   ├── elements: (length: 1)
+            │   │   └── @ IntegerNode (location: (20,5)-(20,7))
+            │   │       ├── flags: static_literal, decimal
+            │   │       └── value: 11
+            │   ├── opening_loc: (20,4)-(20,5) = "["
+            │   └── closing_loc: (20,7)-(20,8) = "]"
+            └── operator_loc: (20,2)-(20,3) = "="

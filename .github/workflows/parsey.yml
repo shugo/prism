@@ -1,0 +1,112 @@
+name: parsey
+
+on:
+  push:
+    branches:
+      - main
+      - "feature/**"
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: test (${{ matrix.os }}, Ruby ${{ matrix.ruby }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        ruby: ["3.1", "3.4", "4.0"]
+    env:
+      # The development dependencies do not resolve on older rubies; the
+      # per-version gemfiles carry just what the test suite needs.
+      BUNDLE_GEMFILE: ${{ matrix.ruby == '3.1' && 'gemfiles/3.1/Gemfile' || 'Gemfile' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: ${{ matrix.ruby }}
+          bundler-cache: true
+      - name: Compile
+        run: bundle exec rake compile
+      - name: Test (includes the parse.y fixture equivalence ratchet)
+        run: bundle exec rake test
+      - name: C unit tests
+        run: make test-parsey
+
+  excluded-build:
+    name: build without the backend (gem default)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Compile with the backend excluded
+        run: PRISM_PARSEY=0 bundle exec rake compile
+      - name: The backend is absent and requesting it raises
+        run: |
+          ruby -Ilib -rprism -e '
+            raise "backends: #{Prism.backends}" unless Prism.backends == [:prism]
+            begin
+              Prism.parse("1", backend: :parse_y)
+              raise "expected an ArgumentError"
+            rescue ArgumentError
+            end
+            raise "hand parse failed" unless Prism.parse("1 + 2").success?
+          '
+      - name: Test suite (parse.y tests skip themselves)
+        run: bundle exec rake test
+
+  sanitize:
+    name: address/UB sanitizers
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Generate templated sources
+        run: bundle exec rake templates parsey:generate
+      - name: Build and run the C tests under the sanitizers
+        run: |
+          set -eu
+          mkdir -p build/sanitize
+          for source in test/prism/parsey/*.c; do
+            bin="build/sanitize/$(basename "$source" .c)"
+            cc -fsanitize=address,undefined -fno-sanitize-recover=all \
+               -g -O1 -std=c99 -D_DEFAULT_SOURCE \
+               -Iinclude -Isrc/parsey \
+               src/*.c src/*/*.c "$source" -o "$bin"
+            # AddressSanitizer occasionally fails to start on some kernels
+            # (spurious DEADLYSIGNAL loops before main); retry a few times.
+            for attempt in 1 2 3 4 5; do
+              if timeout 120 "$bin"; then
+                break
+              elif [ "$attempt" = 5 ]; then
+                echo "$bin failed"
+                exit 1
+              fi
+              echo "retrying $bin (attempt $attempt hit an ASan startup failure)"
+            done
+          done
+
+  tolerance:
+    name: error-tolerance metrics (informational)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: "3.4"
+          bundler-cache: true
+      - name: Compile
+        run: bundle exec rake compile
+      - name: Recovery quality vs the hand-written parser
+        run: ruby -Ilib test/prism/parsey/tolerance_bench.rb
